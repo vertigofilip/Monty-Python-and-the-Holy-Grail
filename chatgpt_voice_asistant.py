@@ -2,9 +2,10 @@ import openai
 import pyttsx3
 import speech_recognition as sr
 import time
+import env
 
 # Set your OpenAI API key
-openai.api_key = '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'
+openai.api_key = env.OPEN_AI_KEY
 
 # Initialize the text-to-speach engine
 engine = pyttsx3.init()
@@ -25,7 +26,7 @@ def generate_response(prompt):
         max_tokens=4000,
         n=1,
         stop=None,
-        tempreture=0.5,
+        temperature=0.5
     )
     return responce['choices'][0]['text']
 
