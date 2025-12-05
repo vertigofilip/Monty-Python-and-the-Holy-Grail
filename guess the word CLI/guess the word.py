@@ -10,7 +10,8 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 file_path = os.path.join(script_dir, 'dictionary.txt')
 
 words = []
-letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+guesed_letters = ""
+letters = "abcdefghijklmnopqrstuvwxyz"
 print("Welcome to guess the word game.")
 print("explanation:")
 print("Write a guess, and press enter. The game will give feedback.")
@@ -23,6 +24,8 @@ try:
 except ValueError:
     word_length = random.randint(2, 5)
 
+for i in range(word_length):
+    guesed_letters += "|"
 
 try:
     number_of_gueses = int(input("Select number of gueses, the default is 10 \n"))
@@ -65,19 +68,27 @@ for i in range(number_of_gueses):
         for j in range(word_length):
             if(guess[j] == temp[j]):
                 menu = menu[:j] + '+' + menu[j+1:]
-                temp = temp[:j] + '-' + temp[j+1:]
-        for j in range(word_length):
-            if(guess[j] in temp):
-                menu = menu[:j] + '~' + menu[j+1:]
                 temp = temp[:j] + '|' + temp[j+1:]
+                guesed_letters = guesed_letters[:j] + guess[j] + guesed_letters[j+1:]
+                if( guess in letters.upper()):
+                    letters = letters[:letters.upper().find(guess[j])] + guess[j] + letters[letters.upper().find(guess[j])+1:]
+        print("")
+        for j in range(word_length):
+            if(guess[j] in temp ):
+                menu = menu[:j] + '~' + menu[j+1:]
+                #temp = temp[:j] + '|' + temp[j+1:]
+                if( guess in letters.upper()):
+                    letters = letters[:letters.upper().find(guess[j])] + guess[j] + letters[letters.upper().find(guess[j])+1:]
                 while(guess[j] in temp):
                     temp = temp[:temp.find(guess[j])] + '|' + temp[temp.find(guess[j])+1:]
             else:
-                if(guess[j] in letters):
-                    letters = letters[:letters.find(guess[j])] + '|' + letters[letters.find(guess[j])+1:]
+                if(guess[j] in letters.upper()):
+                    letters = letters[:letters.upper().find(guess[j])] + '|' + letters[letters.upper().find(guess[j])+1:]
                 if(menu[j] == '|'):
                     menu = menu[:j] + '-' + menu[j+1:]
-        menu += "    "
+        menu += " "
+        menu += guesed_letters
+        menu += " "
         menu += letters
         print(menu)
 

@@ -1,0 +1,29 @@
+Welcome to guess the word game.
+explanation:
+Write a guess, and press enter. The game will give feedback.
++ = correct letter at correct place
+~ = correct letter at incorrect place
+- = incorrect letter
+Select word length, the default is randon 2 to 5 
+5
+Select number of gueses, the default is 10 
+
+write a correct word and press enter 
+
+SHEWS
+-----    abcdefghijklmnopqrstuvwxyz
+hello
+HELLO
+~---- ||||| abcd|fgHijk|mn|pqrstuvwxyz
+world
+WORLD
+~---- ||||| abc||fgHijk|mn|pq|stuvWxyz
+taskc
+TASKC
+this word does'nt exist
+tasks
+TASKS
+--~-+ ||||S |bc||fgHij||mn|pq|||uvWxyz
+tests
+TESTS
+-~--+ ||||S |bc||fgHij||mn|pq|||uvWxy||bc||fgHij||mn|pq|||uvWxyE|bc||fgHij||mn|pq|||uvWxy||bc||fgHij||mn|pq|||uvWxyz
