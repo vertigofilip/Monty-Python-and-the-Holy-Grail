@@ -8,7 +8,8 @@ from tkinter import ttk, messagebox
 class AdvancedLetterGrid:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Advanced Letter Grid")
+        self.root.geometry("800x500")
+        self.root.title("guess the word game")
         
         # Initialize variables
         self.attempt = 0
@@ -45,8 +46,12 @@ class AdvancedLetterGrid:
 
         self.result_label = ttk.Label(input_frame, text="Result: ")
         self.result_label.pack(side="left", padx=5)
+    
+    def validate_single_char(new_value):
+        return len(new_value) <= 1
 
     def on_button_click(self):
+        self.vcmd = (self.root.register(self.validate_single_char), '%P')
         try:
             self.word_length_number = int(self.word_length.get())
             self.max_attempts_number = int(self.max_attempts.get())
@@ -60,12 +65,21 @@ class AdvancedLetterGrid:
             if self.max_attempts_number < 1:
                 self.max_attempts_number = 1
             
-            
         except ValueError:
             self.word_length_number = random.randint(2, 8)
             self.max_attempts_number = 10
         
-        
+        self.grid_frame = tk.Frame(self.root, bg="lightgray", bd=2, relief="groove")
+        self.grid_frame.pack(padx=10, pady=10)
+
+        self.entries = []
+        for i in range(self.max_attempts_number):
+            self.row_entries = []
+            for j in range(self.word_length_number):
+                entry = tk.Entry(self.grid_frame, width=3, justify="center", validate="key", validatecommand=self.vcmd)
+                entry.grid(row=i, column=j, padx=2, pady=2)
+                self.row_entries.append(entry)
+            self.entries.append(self.row_entries)
 
 
 if __name__ == "__main__":
