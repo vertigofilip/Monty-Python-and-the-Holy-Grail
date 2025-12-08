@@ -1,83 +1,78 @@
 #!/usr/bin/env python3
 
-import tkinter as tk
 import os
 import random
+import tkinter as tk
+from tkinter import ttk, messagebox
 
-class SimplePaintApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Calculator")
-        # Get the directory where the script is located
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        # Build full path to dictionary.txt
-        file_path = os.path.join(script_dir, 'dictionary.txt')
-        words = []
-        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        word_length = 5
-        number_of_gueses = 10
-        for row in range(number_of_gueses):
-            for col in range(word_length + 2):
-                # Get letter (or empty if not enough letters)
-                index = row * word_length + col
-                letter = ""
-                # Create label (square with letter)
-                if(col>=word_length):
-                    label = tk.Label(
-                        root,
-                        text=letter,
-                        font=("Arial", 24, "bold"),
-                        width=2,
-                        height=1,
-                        relief="solid",      # Border style
-                        borderwidth=2,
-                        bg="white"
-                    )
-                    label.grid(row=row, column=col, padx=2, pady=2)
-                else:
-                    label = tk.Label(
-                        root,
-                        text=letter,
-                        font=("Arial", 24, "bold"),
-                        width=2,
-                        height=1,
-                        relief="solid",      # Border style
-                        borderwidth=2,
-                        bg="white"
-                    )
-                    label.grid(row=row, column=col, padx=2, pady=2)
+class AdvancedLetterGrid:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Advanced Letter Grid")
+        
+        # Initialize variables
+        self.attempt = 0
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.file_path = os.path.join(self.script_dir, 'dictionary.txt')  # Fixed: self.script_dir
+        self.words = []
+        self.guessed_letters = ""  # Fixed typo: guesed -> guessed
+        self.letters = "abcdefghijklmnopqrstuvwxyz"
+        
+        # Create UI elements
+        self.grid_control()
+        
+        # mainloop should be at the END
+        self.root.mainloop()
+    
+    def grid_control(self):
+        input_frame = ttk.Frame(self.root, padding="10")
+        input_frame.pack(pady=10)
 
-# Run the app
+        # First number with default value between "2" and "8"
+        ttk.Label(input_frame, text="Word length(2 - 15)").pack(side="left", padx=5)
+        self.word_length = tk.StringVar(value=random.randint(2, 8))  # Default value here
+        self.word_length_entry = ttk.Entry(input_frame, textvariable=self.word_length, width=10)
+        self.word_length_entry.pack(side="left", padx=5)
+
+        # Second number with default value "10"
+        ttk.Label(input_frame, text="Number of atempts").pack(side="left", padx=5)
+        self.max_attempts = tk.StringVar(value="10")  # Default value here
+        self.max_attempts_entry = ttk.Entry(input_frame, textvariable=self.max_attempts, width=10)
+        self.max_attempts_entry.pack(side="left", padx=5)
+
+        self.submit_btn = ttk.Button(input_frame, text="Start", command=self.on_button_click)
+        self.submit_btn.pack(side="left", padx=10)
+
+        self.result_label = ttk.Label(input_frame, text="Result: ")
+        self.result_label.pack(side="left", padx=5)
+
+    def on_button_click(self):
+        try:
+            self.word_length_number = int(self.word_length.get())
+            self.max_attempts_number = int(self.max_attempts.get())
+            
+            # Validate inputs
+            if self.word_length_number < 2:
+                self.word_length_number = 2
+            if self.word_length_number > 15:
+                self.word_length_number = 15
+
+            if self.max_attempts_number < 1:
+                self.max_attempts_number = 1
+            
+            
+        except ValueError:
+            self.word_length_number = random.randint(2, 8)
+            self.max_attempts_number = 10
+        
+        
+
+
 if __name__ == "__main__":
-    root = tk.Tk()
-    root.geometry("300x400") # Set a default size
-    
-    # 4. FIX: actually instantiate the class!
-    app = SimplePaintApp(root)
-    
-    root.mainloop()
+    app = AdvancedLetterGrid()
 
 
 """
-
-
-print("Welcome to guess the word game.")
-print("explanation:")
-print("Write a guess, and press enter. The game will give feedback.")
-print("+ = correct letter at correct place")
-print("~ = correct letter at incorrect place")
-print("- = incorrect letter")
-
-try:
-    word_length = int(input("Select word length, the default is randon 2 to 5 \n"))
-except ValueError:
-    word_length = random.randint(2, 5)
-
-
-try:
-    number_of_gueses = int(input("Select number of gueses, the default is 10 \n"))
-except ValueError:
-    number_of_gueses = 10
 
 
 with open(file_path, 'r') as file:
@@ -93,7 +88,10 @@ menu = ""
 win_condition = False
 for i in range(word_length):
     menu += "-"
-menu += "    "
+menu += " "
+for j in range(word_length):
+    menu += "|"
+menu += " "
 menu += letters
 #print(words[correct])  # testing cheat uncoment to enable. coment to disable
 print(menu)
@@ -115,19 +113,27 @@ for i in range(number_of_gueses):
         for j in range(word_length):
             if(guess[j] == temp[j]):
                 menu = menu[:j] + '+' + menu[j+1:]
-                temp = temp[:j] + '-' + temp[j+1:]
-        for j in range(word_length):
-            if(guess[j] in temp):
-                menu = menu[:j] + '~' + menu[j+1:]
                 temp = temp[:j] + '|' + temp[j+1:]
+                guesed_letters = guesed_letters[:j] + guess[j] + guesed_letters[j+1:]
+                if( guess in letters.upper()):
+                    letters = letters[:letters.upper().find(guess[j])] + guess[j].upper() + letters[letters.upper().find(guess[j])+1:]
+        print("")
+        for j in range(word_length):
+            if(guess[j] in temp ):
+                menu = menu[:j] + '~' + menu[j+1:]
+                #temp = temp[:j] + '|' + temp[j+1:]
+                if( guess in letters.upper()):
+                    letters = letters[:letters.upper().find(guess[j])] + guess[j].upper() + letters[letters.upper().find(guess[j])+1:]
                 while(guess[j] in temp):
                     temp = temp[:temp.find(guess[j])] + '|' + temp[temp.find(guess[j])+1:]
             else:
-                if(guess[j] in letters):
-                    letters = letters[:letters.find(guess[j])] + '|' + letters[letters.find(guess[j])+1:]
+                if(guess[j] in letters.upper()):
+                    letters = letters[:letters.upper().find(guess[j])] + '|' + letters[letters.upper().find(guess[j])+1:]
                 if(menu[j] == '|'):
                     menu = menu[:j] + '-' + menu[j+1:]
-        menu += "    "
+        menu += " "
+        menu += guesed_letters
+        menu += " "
         menu += letters
         print(menu)
 
@@ -138,4 +144,6 @@ else:
     print("you lost")
     print("correct word:")
     print(words[correct])
+
+
 """

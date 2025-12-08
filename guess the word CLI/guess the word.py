@@ -20,9 +20,14 @@ print("~ = correct letter at incorrect place")
 print("- = incorrect letter")
 
 try:
-    word_length = int(input("Select word length, the default is randon 2 to 5 \n"))
+    word_length = int(input("Select word length between 2 and 15, the default is randon 2 to 8 \n"))
 except ValueError:
-    word_length = random.randint(2, 5)
+    word_length = random.randint(2, 8)
+
+if(word_length < 2):
+    word_length = 2
+if(word_length > 15):
+    word_length = 15
 
 for i in range(word_length):
     guesed_letters += "|"
@@ -31,6 +36,9 @@ try:
     number_of_gueses = int(input("Select number of gueses, the default is 10 \n"))
 except ValueError:
     number_of_gueses = 10
+
+if(number_of_gueses < 1):
+    number_of_gueses = 1
 
 
 with open(file_path, 'r') as file:
@@ -46,7 +54,10 @@ menu = ""
 win_condition = False
 for i in range(word_length):
     menu += "-"
-menu += "    "
+menu += " "
+for j in range(word_length):
+    menu += "|"
+menu += " "
 menu += letters
 #print(words[correct])  # testing cheat uncoment to enable. coment to disable
 print(menu)
@@ -71,14 +82,14 @@ for i in range(number_of_gueses):
                 temp = temp[:j] + '|' + temp[j+1:]
                 guesed_letters = guesed_letters[:j] + guess[j] + guesed_letters[j+1:]
                 if( guess in letters.upper()):
-                    letters = letters[:letters.upper().find(guess[j])] + guess[j] + letters[letters.upper().find(guess[j])+1:]
+                    letters = letters[:letters.upper().find(guess[j])] + guess[j].upper() + letters[letters.upper().find(guess[j])+1:]
         print("")
         for j in range(word_length):
             if(guess[j] in temp ):
                 menu = menu[:j] + '~' + menu[j+1:]
                 #temp = temp[:j] + '|' + temp[j+1:]
                 if( guess in letters.upper()):
-                    letters = letters[:letters.upper().find(guess[j])] + guess[j] + letters[letters.upper().find(guess[j])+1:]
+                    letters = letters[:letters.upper().find(guess[j])] + guess[j].upper() + letters[letters.upper().find(guess[j])+1:]
                 while(guess[j] in temp):
                     temp = temp[:temp.find(guess[j])] + '|' + temp[temp.find(guess[j])+1:]
             else:
