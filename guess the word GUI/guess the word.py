@@ -32,25 +32,28 @@ class AdvancedLetterGrid:
         # First number with default value between "2" and "8"
         ttk.Label(input_frame, text="Word length(2 - 15)").pack(side="left", padx=5)
         self.word_length = tk.StringVar(value=random.randint(2, 8))  # Default value here
-        self.word_length_entry = ttk.Entry(input_frame, textvariable=self.word_length, width=10)
+        self.word_length_entry = ttk.Entry(input_frame, textvariable=self.word_length, width=10, state="normal")
         self.word_length_entry.pack(side="left", padx=5)
 
         # Second number with default value "10"
         ttk.Label(input_frame, text="Number of atempts").pack(side="left", padx=5)
         self.max_attempts = tk.StringVar(value="10")  # Default value here
-        self.max_attempts_entry = ttk.Entry(input_frame, textvariable=self.max_attempts, width=10)
+        self.max_attempts_entry = ttk.Entry(input_frame, textvariable=self.max_attempts, width=10, state="normal")
         self.max_attempts_entry.pack(side="left", padx=5)
 
-        self.submit_btn = ttk.Button(input_frame, text="Start", command=self.on_button_click)
+        self.submit_btn = ttk.Button(input_frame, text="Start", command=self.on_button_click, state="normal")
         self.submit_btn.pack(side="left", padx=10)
 
         self.result_label = ttk.Label(input_frame, text="Result: ")
         self.result_label.pack(side="left", padx=5)
     
-    def validate_single_char(new_value):
+    def validate_single_char(self, new_value):
         return len(new_value) <= 1
 
     def on_button_click(self):
+        self.max_attempts_entry.config(state="readonly")
+        self.word_length_entry.config(state="readonly")
+        self.submit_btn.config(state="disabled")
         self.vcmd = (self.root.register(self.validate_single_char), '%P')
         try:
             self.word_length_number = int(self.word_length.get())
@@ -69,17 +72,65 @@ class AdvancedLetterGrid:
             self.word_length_number = random.randint(2, 8)
             self.max_attempts_number = 10
         
+        with open(self.file_path, 'r') as file:
+            for line in file:
+                word = line.strip()
+                if len(word) == self.word_length_number:
+                    self.words.append(word)
+        
+        self.correct = random.randint(0, len(self.words))
+
         self.grid_frame = tk.Frame(self.root, bg="lightgray", bd=2, relief="groove")
         self.grid_frame.pack(padx=10, pady=10)
 
         self.entries = []
         for i in range(self.max_attempts_number):
             self.row_entries = []
-            for j in range(self.word_length_number):
-                entry = tk.Entry(self.grid_frame, width=3, justify="center", validate="key", validatecommand=self.vcmd)
+            for j in range(self.word_length_number + 1):
+                if(i == 0):
+                    if(j == self.word_length_number):
+                        entry = tk.Label(self.grid_frame, text="abcdefghijklmnopqrstuvwxyz")
+                    else:
+                        entry = tk.Entry(self.grid_frame, width=3, justify="center", validate="key", validatecommand=self.vcmd, state="normal")
+                else:
+                    if(j == self.word_length_number):
+                        entry = tk.Label(self.grid_frame, text="")
+                    else:
+                        entry = tk.Entry(self.grid_frame, width=3, justify="center", validate="key", validatecommand=self.vcmd, state="readonly")
                 entry.grid(row=i, column=j, padx=2, pady=2)
                 self.row_entries.append(entry)
             self.entries.append(self.row_entries)
+        
+        self.game_menu = tk.Frame(self.root, bg="lightgray", bd=2, relief="groove")
+        self.grid_frame.pack(padx=10, pady=10)
+        self.submit_btn = ttk.Button(self.root, text="Submit aswer", command=self.submit_aswer).pack(side="left", padx=5)
+        self.win_indicator = ttk.Label(self.root, text=self.words[self.correct])
+        self.win_indicator.pack(side="left", padx=5)
+    
+
+    def submit_aswer(self):
+        resault = True
+        correct_word = self.words[self.correct]
+        answer = ""
+        for i in range(self.word_length_number):
+            answer += self.entries[self.attempt][i].get().upper()
+        for i in range(self.word_length_number):
+            if(self.entries[self.attempt][i].get().upper() != correct_word[i]):
+                resault = False
+            else:
+                self.letters = self.letters[:self.letters.upper().find(self.entries[self.attempt][i].get())] + self.entries[self.attempt][i].get().upper() + self.letters[self.letters.upper().find(self.entries[self.attempt][i].get())+1:]
+            correct_word = correct_word[:i] + '|' + correct_word[i+1:]
+        if(resault):
+            self.win_indicator.config(text="You won")
+            self.submit_btn.config(state="disabled")
+        self.attempt = self.attempt + 1
+        if(self.attempt >= self.word_length_number):
+            self.win_indicator.config(text="You lost")
+        for i in range(self.word_length_number):
+            self.entries[self.attempt][i].config(state="normal")
+            self.entries[self.attempt-1][i].config(state="disabled")
+        
+
 
 
 if __name__ == "__main__":
@@ -88,14 +139,6 @@ if __name__ == "__main__":
 
 """
 
-
-with open(file_path, 'r') as file:
-    for line in file:
-        word = line.strip()
-        if len(word) == word_length:
-            words.append(word)
-
-correct = random.randint(0, len(words))
 
 print("write a correct word and press enter \n")
 menu = ""
