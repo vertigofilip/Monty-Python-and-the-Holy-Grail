@@ -119,6 +119,7 @@ class AdvancedLetterGrid:
                 resault = False
             else:
                 self.letters = self.letters[:self.letters.upper().find(self.entries[self.attempt][i].get())] + self.entries[self.attempt][i].get().upper() + self.letters[self.letters.upper().find(self.entries[self.attempt][i].get())+1:]
+                self.entries[self.attempt][i].config(highlightthickness=2, highlightbackground="green", highlightcolor="green" )
             correct_word = correct_word[:i] + '|' + correct_word[i+1:]
         if(resault):
             self.win_indicator.config(text="You won")
