@@ -8,6 +8,7 @@ from enum import Enum
 import datetime
 
 class Repeat_interval(Enum):
+    ANY_TIME = "ANY_TIME"
     EVERY_DAY = "EVERY_DAY"
     EVERY_OTHER_DAY = "EVERY_OTHER_DAY"
     EVERY_THIRD_DAY = "EVERY_THIRD_DAY"
@@ -31,15 +32,17 @@ class Status(Enum):
     STRUSTURAL = "┌ "
 
 class task:
-    def __init__(self, root_new, name_new, description_new, status_new, repeat_new, due_date_new = None):
+    def __init__(self, root_new, name_new, description_new, status_new, repeat_new, repetition_number_new = 0, due_date_new = None):
         self.root = root_new
         self.name = name_new
         self.description = description_new
         self.status = status_new
         self.creation_date = datetime.datetime.now()
         self.repeat = repeat_new
+        self.repetition_number = repetition_number_new      #65,535 = no limit
         self.due_date = due_date_new
         self.subtasks = []
+        self.parent
     def display(self):
         task_frame = ttk.Frame(self.root, padding="10", relief="groove", borderwidth=2)
         task_frame.pack(pady=5, padx=10, fill="x")
