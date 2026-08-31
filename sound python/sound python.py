@@ -19,9 +19,13 @@ def main():
     #mysound = fm_synthesis(carrier, modulator)
 
     sound1 = [sawtooth_tone(frequency= 220 * i, amplitude= 0.7 / i,) for i in range(1, 40, 4)]
-    sound2 = [sine_tone(frequency= 2 , amplitude= 0.7) for i in range(1, 40, 4)]
-    mysound = [am_synthesis(sound1[i], sound2[i]) for i in range(len(sound1))]
-    mysound = sum(mysound)
+    sound2 = [sine_tone(frequency= 220 * i, amplitude= 0.7 / i,) for i in range(1, 40, 4)]
+    carier = [sine_tone(frequency= 2 , amplitude= 0.7) for i in range(1, 40, 4)]
+    mysound1 = [am_synthesis(sound1[i], carier[i]) for i in range(len(sound1))]
+    mysound2 = [am_synthesis(sound2[i], carier[i]) for i in range(len(sound1))]
+    mysound1 = sum(mysound1)
+    mysound2 = sum(mysound2)
+    mysound = (mysound1 + mysound2)/2
     mysound = aply_envelope(mysound, [0.5, 0.2, 0.6, 0.5])
 
     sd.play(mysound)
