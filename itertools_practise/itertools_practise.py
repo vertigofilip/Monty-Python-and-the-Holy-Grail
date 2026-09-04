@@ -49,8 +49,16 @@ print(out)
 
 
 
-out = ""
+out = []
 liczby = [1, 1, 2, 2, 2, 3, 1, 1]
-data = sorted(liczby)
 for i, j in itertools.groupby(liczby):
-    uot += 
+    out.append(list(j))
+print(out)
+
+
+
+
+out = ""
+for i in itertools.product('ab', repeat=3):
+    out += ''.join(i) + " "
+print(out)
