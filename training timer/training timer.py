@@ -2,8 +2,10 @@ import numpy as np
 import sounddevice as sd
 import time
 import copy
+import os
 
 def main():
+    os.system('cls' if os.name == 'nt' else 'clear')
     sound1 = [sawtooth_tone(frequency= 220 * i, amplitude= 0.7 / i,) for i in range(1, 40, 4)]
     sound2 = [sine_tone(frequency= 220 * i, amplitude= 0.7 / i,) for i in range(1, 40, 4)]
     carier = [sine_tone(frequency= 2 , amplitude= 0.7) for i in range(1, 40, 4)]
@@ -57,9 +59,14 @@ def main():
     trainin_element("Pozycja Y", 20, mysound, mysound)
 
 def trainin_element(training_name, training_time, beginning_sound, ending_sound):
+
+    os.system('cls' if os.name == 'nt' else 'clear')
+
     print(training_name)
 
     input("Naciśnij Enter...")
+
+    os.system('cls' if os.name == 'nt' else 'clear')
 
     print("Przygotuj się")
 
@@ -70,7 +77,12 @@ def trainin_element(training_name, training_time, beginning_sound, ending_sound)
     sd.play(beginning_sound)
     #sd.wait()
 
-    time.sleep(training_time)
+    for i in range(training_time):
+        os.system('cls' if os.name == 'nt' else 'clear')
+        print(training_time - (i))
+        time.sleep(1)
+
+    #time.sleep(training_time)
 
     sd.play(ending_sound)
     sd.wait()
