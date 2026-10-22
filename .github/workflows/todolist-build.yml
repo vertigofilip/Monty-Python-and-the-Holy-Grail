@@ -1,0 +1,39 @@
+# Builds the to-do list's Windows executables (todolist gui full/build_desktop.py).
+# Run it from the Actions tab ("Run workflow"); it also runs when the program changes.
+# The .exe files are in the run's artifact "todolist-windows".
+name: To-do list Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "todolist gui full/todo_db/**"
+      - "todolist gui full/todo_server/**"
+      - "todolist gui full/packaging/**"
+      - "todolist gui full/build_desktop.py"
+      - "todolist gui full/requirements.txt"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: todolist gui full
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test
+        continue-on-error: true  # the tests are run on Linux; a Windows-only failure does not stop the build
+        run: |
+          python -m pip install --quiet -r requirements.txt
+          python -m pytest -q
+      - name: Build
+        run: python build_desktop.py
+      - name: Smoke test
+        run: dist\windows\todolist-server.exe --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: todolist-windows
+          path: todolist gui full/dist/windows/*.exe

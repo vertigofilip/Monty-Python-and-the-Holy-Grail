@@ -1,0 +1,26 @@
+# Installable package of the desktop program and the server (used by the Nix
+# flake, flake.nix; "pip install ." works too). The scripts and .venv do not need it.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "todolist"
+version = "1.0"
+description = "To-do list: desktop program (Tkinter) and application server (FastAPI)"
+requires-python = ">=3.11"
+dependencies = ["SQLAlchemy>=2.0,<3.0"]
+
+[project.optional-dependencies]
+client = ["httpx>=0.27", "plyer>=2.1", "pystray>=0.19", "Pillow>=10"]
+server = ["fastapi>=0.110", "uvicorn>=0.29"]
+
+[project.scripts]
+todolist = "todo_db.app:main"
+todolist-server = "todo_server.__main__:main"
+
+[tool.setuptools]
+packages = ["todo_db", "todo_server"]
+
+[tool.setuptools.package-data]
+todo_db = ["logo.png"]

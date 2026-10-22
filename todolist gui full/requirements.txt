@@ -1,0 +1,9 @@
+SQLAlchemy>=2.0,<3.0
+pytest>=8.0
+plyer>=2.1  # desktop reminders (system notifications)
+pystray>=0.19  # tray icon (on Linux its menu also needs python3-gi from the system)
+Pillow>=10  # the tray icon's picture
+# application server (todo_server)
+fastapi>=0.110
+uvicorn>=0.29
+httpx>=0.27  # used by the server tests
