@@ -1,6 +1,7 @@
 *.db
 settings.json
 client_login.json
+reminder_tasks.json
 todo_client.log
 # Android build (build_android.sh)
 android/bin/

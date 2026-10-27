@@ -45,7 +45,7 @@ from todo_db.reminder_core import DueTask, Reminders
 
 from todo_mobile import api as remote
 from todo_mobile import storage
-from todo_mobile.reminder_service import MAX_LINES, find_due_tasks
+from todo_mobile.reminder_service import MAX_LINES, SAVED_TASKS, find_due_tasks
 from todo_mobile.tasks import (
     NONE, PRIORITIES, SHOW_CHOICES, SHOW_OPEN, URGENCIES, final_stage_id, history_lines,
     is_overdue, next_stage_id, parse_due, repeat_label, sorted_rules, task_details, task_rows,
@@ -387,8 +387,9 @@ class TaskScreen(Screen):
         rules = [(tr(NONE), None)] + [(repeat_label(r), r["id"])
                                       for r in sorted_rules(data["repeat_rules"])]
         self.repeat = Choice(rules, task["repeat_rule_id"] if task else None)
-        self.repeat_count = text_input(str(task["repeat_count"]) if task else "0",
+        self.repeat_count = text_input(str(task["repeat_count"]) if task else "1",  # new: once
                                        input_filter="int")
+        self.repeat.bind(text=lambda *_args: self._rule_changed())
         self.due_date = text_input(task.get("due_date") or "" if task else "",
                                    hint_text=tr("YYYY-MM-DD, empty = none"))
         due_row = BoxLayout(size_hint_y=None, height=ROW, spacing=dp(6))
@@ -438,6 +439,18 @@ class TaskScreen(Screen):
         layout.add_widget(scroll)
         layout.add_widget(button(tr("Save"), self.save, height=dp(56)))
         self.add_widget(layout)
+
+    def _rule_changed(self) -> None:
+        """Choosing how often makes the task repeat forever; "none" makes it once again.
+
+        A count typed in by hand (other than 0 or 1) is kept.
+        """
+        count = self.repeat_count.text.strip()
+        if self.repeat.value is None:
+            if count == "0":
+                self.repeat_count.text = "1"
+        elif count == "1":
+            self.repeat_count.text = "0"
 
     def _fields(self) -> dict[str, Any] | None:
         name = self.name_input.text.strip()
@@ -939,6 +952,8 @@ class TodoMobileApp(App):
         self.stop_reminders()  # nobody to remind until the next login
         self.api, self.user, self.data = None, None, {}
         remote.forget_login(self.login_file)
+        # The tasks kept for reminders offline belong to this login.
+        (self.login_file.parent / SAVED_TASKS).unlink(missing_ok=True)
         self.show_login()
         if api is not None:
             threading.Thread(target=api.logout, daemon=True).start()

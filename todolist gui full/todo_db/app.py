@@ -208,7 +208,8 @@ class TaskDialog(tk.Toplevel):
         )
         self._rule = Choice(form, rules, task.repeat_rule_id if task else None)
         self._count = ttk.Spinbox(form, from_=0, to=9999, width=6)
-        self._count.set(task.repeat_count if task else 0)
+        self._count.set(task.repeat_count if task else 1)  # a new task: once
+        self._rule.bind("<<ComboboxSelected>>", lambda _event: self._rule_changed())
         self._tag_list = tk.Listbox(
             form, selectmode="multiple", height=min(6, max(2, len(self._tags))),
             exportselection=False,
@@ -247,6 +248,18 @@ class TaskDialog(tk.Toplevel):
         self._name.focus_set()
         self.wait_visibility()
         self.grab_set()
+
+    def _rule_changed(self) -> None:
+        """Choosing how often makes the task repeat forever; "none" makes it once again.
+
+        A count typed in by hand (other than 0 or 1) is kept.
+        """
+        count = self._count.get().strip()
+        if self._rule.value() is None:
+            if count == "0":
+                self._count.set(1)
+        elif count == "1":
+            self._count.set(0)
 
     def _pick_due_date(self) -> None:
         """Choose the due date from a calendar; it starts at the date typed in, if any."""
@@ -2892,6 +2905,8 @@ def run_remote(account: RemoteAccount) -> bool:
         run_with_reminders(app, lambda today: remote_due_tasks(api, user_id, today, mine))
     finally:
         api.close()
+    if app.logged_out:
+        reminders.SAVED_TASKS.unlink(missing_ok=True)  # not to remind the next user of them
     return app.logged_out
 
 

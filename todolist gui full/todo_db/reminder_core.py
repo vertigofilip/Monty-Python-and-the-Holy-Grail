@@ -8,11 +8,13 @@ library is used, so it also runs on the phone.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from . import settings
@@ -38,6 +40,7 @@ SETTINGS: dict[str, Any] = {
 }
 
 log = logging.getLogger("todo_db.reminders")
+_offline: set[Path] = set()  # saved copies in use now (logged once, not at every check)
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,43 @@ def due_tasks_in(
         if mine and is_due(due_date, task["done"], today):
             due.append(DueTask(task["id"], task["name"], due_date))  # type: ignore[arg-type]
     return sorted(due, key=lambda task: (task.due_date, task.id))
+
+
+def with_saved_copy(fetch: Callable[[], Any], saved: Path, logged_out: type[Exception]) -> Any:
+    """fetch()'s answer from the server, also kept in the file saved; the kept one offline.
+
+    So reminders go on while the server cannot be reached: they are worked out
+    from the tasks as they were at the last check that reached it. The file
+    is readable only by the owner. logged_out (the login has ended) is passed
+    on and the copy forgotten: there is nobody to remind any more. Without a
+    copy the server's error is passed on.
+    """
+    try:
+        answer = fetch()
+    except logged_out:
+        saved.unlink(missing_ok=True)
+        raise
+    except ValueError as error:  # the server could not be reached or refused
+        try:
+            answer = json.loads(saved.read_text(encoding="utf-8"))
+            when = datetime.fromtimestamp(saved.stat().st_mtime)
+        except (OSError, ValueError):
+            raise error from None
+        if saved not in _offline:
+            _offline.add(saved)
+            log.warning("%s; using the tasks known at %s", error, when.isoformat(" ", "minutes"))
+        return answer
+    if saved in _offline:
+        _offline.discard(saved)
+        log.info("The server can be reached again")
+    try:
+        part = saved.with_name(saved.name + ".part")
+        part.write_text(json.dumps(answer, ensure_ascii=False), encoding="utf-8")
+        part.chmod(0o600)
+        part.replace(saved)  # whole or not at all, even if the program stops meanwhile
+    except OSError as error:
+        log.warning("Cannot keep the tasks in %s: %s", saved, error)
+    return answer
 
 
 class Reminders:

@@ -3,7 +3,8 @@
 The app starts this as an Android foreground service (its own process, no
 Kivy; android/reminder_service.py is the entry point). Every
 reminder_check_minutes it looks for unfinished tasks due today or earlier –
-in the phone's own database or on the server, whichever the app uses – and
+in the phone's own database or on the server, whichever the app uses (while
+the server cannot be reached, among the tasks it sent last) – and
 decides when to remind exactly as the desktop program does
 (todo_db.reminder_core): when a task is newly due, or every
 reminder_repeat_minutes. The reminder is one notification listing all due
@@ -35,6 +36,7 @@ NOTIFICATION_ID = 1001  # one notification, replaced each time
 CHANNEL_ID = "task_reminders"
 MAX_LINES = 20  # as the desktop's reminder window
 LOGIN_FILE = "login.json"
+SAVED_TASKS = "reminder_tasks.json"  # the server's tasks, for reminders while offline
 
 log = logging.getLogger("todo_mobile.reminders")
 
@@ -56,9 +58,15 @@ def find_due_tasks(private: Path) -> Callable[[date], list[DueTask]]:
         if login is None:
             return []  # logged out: nothing to remind of
         server = remote.Api(*login)
-        user = server.request("GET", "/auth/me")
+
+        def fetch() -> dict[str, Any]:
+            user = server.request("GET", "/auth/me")
+            return {"user_id": user["id"], "tasks": server.request("GET", "/tasks?done=false")}
+
+        # Offline: the tasks the server sent at the last check that reached it.
+        known = reminder_core.with_saved_copy(fetch, private / SAVED_TASKS, remote.NotLoggedIn)
         only_mine = settings.flag_setting("reminder_only_mine", reminder_core.ONLY_MINE)
-        return due_tasks_in(server.request("GET", "/tasks?done=false"), today, user["id"], only_mine)
+        return due_tasks_in(known["tasks"], today, known["user_id"], only_mine)
 
     return find_due
 

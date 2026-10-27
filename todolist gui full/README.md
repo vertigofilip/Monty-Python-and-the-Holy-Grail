@@ -96,6 +96,7 @@ server with PyInstaller (in its own environment, `build/venv-<system>`):
 | Linux | `python3 build_desktop.py` | `dist/linux/todolist`, `dist/linux/todolist-server` |
 | Windows | `py build_desktop.py` | `dist\windows\todolist.exe`, `dist\windows\todolist-server.exe` |
 | Android | `./build_android.sh` | `android/bin/todolist-1.0-*-debug.apk` |
+| Debian/Ubuntu/Mint | `./build_deb.sh` | `dist/todolist_<version>_amd64.deb` (both programs; `sudo apt install ./dist/todolist_*.deb`) |
 
 PyInstaller builds only for the system it runs on. Without a Windows
 computer, the GitHub Actions workflow `.github/workflows/todolist-build.yml`
@@ -215,8 +216,9 @@ server, or without one on the phone's own database:
   app asks once for permission to show notifications. It starts when you log
   in (or open the tasks without a server) and stops when you log out or
   switch reminders off; after the phone restarts, open the app once to start
-  it again. Run on a computer, the app shows the desktop's orange reminder
-  window instead.
+  it again. While the server cannot be reached, it reminds of the tasks it
+  sent at the last check (kept in the app's private folder). Run on a
+  computer, the app shows the desktop's orange reminder window instead.
 - The phone's Back button goes back from the task form and the history.
 
 Not on the phone: sorting, saved filters, moving tasks, users,
@@ -387,6 +389,13 @@ text instead of a number) is ignored and noted in the log.
 If the server cannot be reached or a reminder cannot be shown, the
 program carries on; the problem is written to `todo_client.log` in the current
 directory, together with a line for every reminder shown.
+
+Reminders also work while the server cannot be reached: every check that
+reaches it keeps the unfinished tasks in `reminder_tasks.json` (current
+directory, readable only by you, ignored by git), and offline the due tasks
+are found among those. Changes made elsewhere in the meantime (a task done on
+the phone) count once the server is back. Logging out deletes the file. The
+phone app does the same with its own copy.
 
 To try it quickly: put `"reminder_check_minutes": 0.1, "reminder_repeat_minutes": 0.5`
 in `settings.json` (a check every 6 seconds, a repeat after 30 seconds), start

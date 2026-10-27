@@ -178,3 +178,6 @@ def test_phone_reminders_from_the_server(
     assert [t.name for t in find_due_tasks(tmp_path)(date.today())] == ["Mine"]  # only mine
     settings.save_setting("reminder_only_mine", False)
     assert sorted(t.name for t in find_due_tasks(tmp_path)(date.today())) == ["Ada's", "Mine"]
+    # The server cannot be reached: the tasks it sent last are used.
+    remote.save_login(tmp_path / "login.json", "http://127.0.0.1:9", ola.token or "")
+    assert sorted(t.name for t in find_due_tasks(tmp_path)(date.today())) == ["Ada's", "Mine"]

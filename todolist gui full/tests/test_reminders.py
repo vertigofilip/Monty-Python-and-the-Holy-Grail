@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.conftest import World
 from tests.test_mobile import logged_in, stage
 from tests.test_remote import server  # noqa: F401 - the live server fixture
-from todo_db import reminders, settings
-from todo_db.remote import ApiClient, RemoteError
+from todo_db import reminder_core, reminders, settings
+from todo_db.remote import ApiClient, NotLoggedIn, RemoteError
 from todo_db.reminders import DueTask, Reminders, is_due, local_due_tasks
 from todo_db.services import TaskService
 
@@ -39,6 +39,13 @@ class Clock:
 def no_settings_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "settings.json"
     monkeypatch.setattr(settings, "SETTINGS_FILE", path)
+    return path
+
+
+@pytest.fixture(autouse=True)
+def saved_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "reminder_tasks.json"
+    monkeypatch.setattr(reminders, "SAVED_TASKS", path)
     return path
 
 
@@ -263,3 +270,53 @@ def test_remote_due_tasks(server: str) -> None:  # noqa: F811
     assert sorted(task.name for task in found) == ["Mine", "Nobody's"]
     assert sorted(task.name for task in everyone) == ["Ada's", "Mine", "Nobody's"]
 
+
+
+def test_offline_the_tasks_from_the_last_check_are_used(
+    saved_tasks: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    tasks = [{"id": 1, "name": "Report", "due_date": TODAY.isoformat(), "done": False,
+              "assignee_id": None}]
+    answers: list[object] = [RemoteError("Cannot reach the server"), tasks]
+
+    def fetch() -> object:
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def due() -> list[str]:
+        found = reminder_core.with_saved_copy(fetch, saved_tasks, NotLoggedIn)
+        return [task.name for task in reminders.due_tasks_in(found, TODAY)]
+
+    with pytest.raises(RemoteError):  # nothing kept yet: the error goes on
+        reminder_core.with_saved_copy(fetch, saved_tasks, NotLoggedIn)
+    assert due() == ["Report"]
+    assert saved_tasks.stat().st_mode & 0o777 == 0o600
+    answers += [RemoteError("Cannot reach the server")] * 2
+    assert due() == ["Report"]
+    assert due() == ["Report"]
+    assert caplog.text.count("using the tasks known at") == 1  # once while offline
+    answers.append(NotLoggedIn("Login expired"))
+    with pytest.raises(NotLoggedIn):
+        due()
+    assert not saved_tasks.exists()
+
+
+def test_remote_due_tasks_offline(server: str, saved_tasks: Path) -> None:  # noqa: F811
+    ola = logged_in(server, "ola@example.com")
+    todo = stage(ola.load_all(), "Simple", "To do")
+    ola.request("POST", "/tasks", {"name": "Mine", "stage_id": todo,
+                                   "due_date": date.today().isoformat()})
+    user_id = ola.request("GET", "/auth/me")["id"]
+    api = ApiClient(server, ola.token)
+    try:
+        assert [t.name for t in reminders.remote_due_tasks(api, user_id, date.today())] == ["Mine"]
+    finally:
+        api.close()
+    offline = ApiClient("http://127.0.0.1:9", ola.token)  # nothing listens there
+    try:
+        found = reminders.remote_due_tasks(offline, user_id, date.today())
+    finally:
+        offline.close()
+    assert [task.name for task in found] == ["Mine"]
