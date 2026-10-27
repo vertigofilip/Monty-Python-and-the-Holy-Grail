@@ -34,6 +34,8 @@ class Api:
             base_url = "http://" + base_url
         self.base_url = base_url
         self.token = token
+        # Whether the last request reached the server (any answer); None before the first.
+        self.connected: bool | None = None
 
     def request(self, method: str, path: str, body: Any = None) -> Any:
         """Send a request; returns the JSON answer or raises RemoteError."""
@@ -47,12 +49,15 @@ class Api:
         try:
             with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
                 content = response.read()
+            self.connected = True
         except urllib.error.HTTPError as error:
+            self.connected = True  # the server answered, with an error
             content = error.read()
             if error.code == 401 and self.token:
                 raise NotLoggedIn(tr("Login expired. Please log in again.")) from error
             raise RemoteError(_error_message(error.code, content)) from error
         except (OSError, ValueError) as error:  # URLError, timeouts, bad addresses
+            self.connected = False
             message = tr("Cannot reach the server at {url}.").format(url=self.base_url)
             raise RemoteError(f"{message} ({error})") from error
         return json.loads(content) if content else None

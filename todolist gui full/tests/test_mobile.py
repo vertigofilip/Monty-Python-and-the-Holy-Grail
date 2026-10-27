@@ -181,3 +181,15 @@ def test_phone_reminders_from_the_server(
     # The server cannot be reached: the tasks it sent last are used.
     remote.save_login(tmp_path / "login.json", "http://127.0.0.1:9", ola.token or "")
     assert sorted(t.name for t in find_due_tasks(tmp_path)(date.today())) == ["Ada's", "Mine"]
+
+
+def test_phone_api_knows_whether_the_server_was_reached(server: str) -> None:  # noqa: F811
+    api = remote.Api(server)
+    assert api.connected is None
+    with pytest.raises(remote.RemoteError):
+        api.login("ola@example.com", "wrong")
+    assert api.connected is True  # it answered, with an error
+    offline = remote.Api("http://127.0.0.1:9")
+    with pytest.raises(remote.RemoteError):
+        offline.request("GET", "/auth/me")
+    assert offline.connected is False

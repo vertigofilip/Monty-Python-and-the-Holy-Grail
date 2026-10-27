@@ -25,6 +25,11 @@ from sqlalchemy.orm import Session
 from .models import ChangeType, TaskChange, utcnow
 
 SYSTEM = "system"
+# Shown under the server settings (desktop program and phone app; translated in i18n).
+COMPRESSION_NOTE = (
+    "Runs every night at midnight. Old history entries are merged into one summary per task; "
+    "the details are lost."
+)
 
 
 @dataclass

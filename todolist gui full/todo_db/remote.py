@@ -58,6 +58,8 @@ class ApiClient:
         self.base_url = base_url.rstrip("/")
         self.token = token
         self._http = httpx.Client(base_url=self.base_url, timeout=TIMEOUT)
+        # Whether the last request reached the server (any answer); None before the first.
+        self.connected: bool | None = None
 
     def request(self, method: str, path: str, body: Any = None) -> Any:
         """Send a request; returns the JSON answer or raises RemoteError."""
@@ -65,8 +67,10 @@ class ApiClient:
         try:
             response = self._http.request(method, path, json=body, headers=headers)
         except httpx.HTTPError as error:
+            self.connected = False
             message = tr("Cannot reach the server at {url}.").format(url=self.base_url)
             raise RemoteError(f"{message} ({error})") from error
+        self.connected = True
         if response.status_code == 401 and self.token:
             raise NotLoggedIn(tr("Login expired. Please log in again."))
         if response.is_error:

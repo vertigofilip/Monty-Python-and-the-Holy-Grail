@@ -179,3 +179,32 @@ def test_admin_changes_server_settings(server: str) -> None:
     ola = log_in(server, "ola@example.com", PASSWORD, remember=False)
     with pytest.raises(RemoteError, match="Administrators only"):
         ola.get_settings()
+
+
+def test_window_shows_whether_the_server_is_reached(server: str) -> None:
+    tk = pytest.importorskip("tkinter")
+    import httpx
+
+    from todo_db.app import TodoApp
+
+    try:
+        tk.Tk().destroy()
+    except tk.TclError:
+        pytest.skip("no display")
+    account = log_in(server, "ola@example.com", PASSWORD, remember=False)
+    assert account.api.connected is True
+    app = TodoApp(account=account)
+    try:
+        address = server.split("://", 1)[1]
+        assert app._connection.cget("text") == f"● Connected to {address}"
+        reached = account.api._http
+        account.api._http = httpx.Client(base_url="http://127.0.0.1:9", timeout=2)  # nobody there
+        app._sync_tick()
+        assert account.api.connected is False
+        assert app._connection.cget("text") == f"● No connection to {address}"
+        account.api._http.close()
+        account.api._http = reached
+        app._sync_tick()
+        assert app._connection.cget("text") == f"● Connected to {address}"
+    finally:
+        app.destroy()

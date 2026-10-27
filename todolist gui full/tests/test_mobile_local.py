@@ -144,3 +144,60 @@ def test_phone_reminders_find_due_tasks_in_either_mode(
     settings.save_setting("mode", "server")  # logged out of the server: nothing to remind of
     assert find_due_tasks(tmp_path)(today) == []
     assert json.loads((tmp_path / "settings.json").read_text())["mode"] == "server"
+
+
+def test_tasks_are_moved_like_on_the_server(tmp_path: Path) -> None:
+    api = LocalApi(tmp_path / "todo.db")
+    todo = stage(api.load_all(), "Simple", "To do")
+    first, second, third = (api.request("POST", "/tasks", {"name": name, "stage_id": todo})
+                            for name in ("First", "Second", "Third"))
+    api.request("POST", f"/tasks/{third['id']}/move", {"parent_id": None, "order": 1})
+    api.request("POST", f"/tasks/{second['id']}/move", {"parent_id": first["id"], "order": None})
+    tasks = {t["name"]: t for t in api.load_all()["tasks"]}
+    assert tasks["Third"]["order"] == 1 and tasks["First"]["order"] == 2
+    assert tasks["Second"]["parent_id"] == first["id"]
+
+
+def test_users_workflows_and_tags_are_managed_on_the_phone(tmp_path: Path) -> None:
+    api = LocalApi(tmp_path / "todo.db")
+    me = api.user
+    anna = api.request("POST", "/admin/users", {"name": "Anna", "email": "anna@example.com"})
+    with pytest.raises(RemoteError, match="already has this email"):
+        api.request("POST", "/admin/users", {"name": "Other", "email": "anna@example.com"})
+    api.request("PATCH", f"/admin/users/{me['id']}", {"is_active": False})
+    with pytest.raises(RemoteError, match="At least one user"):
+        api.request("PATCH", f"/admin/users/{anna['id']}", {"is_active": False})
+    api.request("PATCH", f"/admin/users/{me['id']}", {"is_active": True, "name": "Ja"})
+    assert sorted(u["name"] for u in api.request("GET", "/admin/users")) == ["Anna", "Ja"]
+    api.act_as(anna["id"])
+    assert api.request("GET", "/auth/me")["name"] == "Anna"
+
+    flow = api.request("POST", "/workflows", {"name": "Shopping"})
+    assert [s["name"] for s in flow["stages"]] == ["To do", "Done"]
+    flow = api.request("POST", f"/workflows/{flow['id']}/stages", {"name": "In the basket"})
+    basket = flow["stages"][-1]
+    flow = api.request("POST", f"/stages/{basket['id']}/move", {"delta": -1})
+    assert [s["name"] for s in flow["stages"]] == ["To do", "In the basket", "Done"]
+    flow = api.request("PATCH", f"/stages/{basket['id']}", {"name": "Basket", "is_final": True})
+    assert [(s["name"], s["is_final"]) for s in flow["stages"]][1] == ("Basket", True)
+    task = api.request("POST", "/tasks", {"name": "Milk", "stage_id": basket["id"]})
+    with pytest.raises(RemoteError, match="used by 1 task"):
+        api.request("DELETE", f"/stages/{basket['id']}")
+    with pytest.raises(RemoteError, match="used by 1 task"):
+        api.request("DELETE", f"/workflows/{flow['id']}")
+    api.request("DELETE", f"/tasks/{task['id']}")
+    api.request("DELETE", f"/stages/{basket['id']}")
+    api.request("PATCH", f"/workflows/{flow['id']}", {"name": "Groceries"})
+    assert "Groceries" in {w["name"] for w in api.load_all()["workflows"]}
+    api.request("DELETE", f"/workflows/{flow['id']}")
+    assert "Groceries" not in {w["name"] for w in api.load_all()["workflows"]}
+
+    tag = api.request("POST", "/tags", {"name": "garden"})
+    todo = stage(api.load_all(), "Simple", "To do")
+    api.request("POST", "/tasks", {"name": "Mow", "stage_id": todo, "tag_ids": [tag["id"]]})
+    usage = {t["name"]: t["tasks"] for t in api.request("GET", "/tags/usage")}
+    assert usage["garden"] == 1
+    with pytest.raises(RemoteError, match="used by 1 task"):
+        api.request("DELETE", f"/tags/{tag['id']}")
+    api.request("PATCH", f"/tags/{tag['id']}", {"name": "yard"})
+    assert "yard" in {t["name"] for t in api.load_all()["tags"]}

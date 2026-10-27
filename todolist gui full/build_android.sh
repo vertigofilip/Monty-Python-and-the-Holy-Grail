@@ -92,7 +92,7 @@ rm -rf "$BUILD/recipes"
 cp -r android/recipes "$BUILD/"
 cp android/{main,reminder_service}.py "$BUILD/src/"
 cp todo_mobile/{__init__,api,tasks,local,storage,reminder_service,main}.py "$BUILD/src/todo_mobile/"
-cp todo_db/{__init__,i18n,settings,models,database,services,seed,compression,api_data,reminder_core}.py "$BUILD/src/todo_db/"
+cp todo_db/{__init__,i18n,settings,models,database,services,seed,compression,api_data,reminder_core,presets,management}.py "$BUILD/src/todo_db/"
 cp todo_db/logo.png "$BUILD/"  # the app's icon (icon.filename in buildozer.spec)
 # Pure-Python libraries the app needs, from this project's .venv (see buildozer.spec).
 if ! .venv/bin/python -c "import filetype, typing_extensions" 2>/dev/null; then

@@ -65,6 +65,8 @@ COPY_OR_EMPTY = "{path} does not exist yet. Copy your tasks there, or start with
 ROW = dp(48)
 GREEN = (0.18, 0.62, 0.27, 1)  # the "Next stage" button and the chosen day, as on the computer
 GREY = (0.6, 0.6, 0.6, 1)
+CONNECTION_OK = (0.4, 0.85, 0.45, 1)  # the server indicator: reached (green)...
+CONNECTION_LOST = (1, 0.45, 0.4, 1)  # ...or not (red)
 RED = (1, 0.42, 0.42, 1)  # overdue tasks, Sundays
 MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August",
           "September", "October", "November", "December")
@@ -306,6 +308,12 @@ class ListScreen(Screen):
         bar.add_widget(button(tr("Refresh"), app.refresh, size_hint=(None, 1), width=dp(100)))
         bar.add_widget(button(tr("Menu"), app.show_menu, size_hint=(None, 1), width=dp(90)))
         layout.add_widget(bar)
+        # Server mode: whether the server could be reached the last time it was asked.
+        self.connection = Label(text="", size_hint_y=None, height=0, font_size="13sp",
+                                halign="left", valign="middle", shorten=True,
+                                padding=[dp(8), 0])
+        self.connection.bind(size=lambda w, size: setattr(w, "text_size", size))
+        layout.add_widget(self.connection)
 
         filters = BoxLayout(size_hint_y=None, height=ROW, spacing=dp(4), padding=[dp(4), 0])
         self.search = text_input(hint_text=tr("Search"))
@@ -328,6 +336,7 @@ class ListScreen(Screen):
         """Fill the list from the app's latest data."""
         user = self.app.user or {}
         self.title.text = f"{tr('To-do list')} · {user.get('name', '')}"
+        self.show_connection()
         tasks = self.app.data["tasks"] if self.app.data else []
         rows = task_rows(tasks, self.search.text, self.show_choice.value)
         today = date.today()
@@ -346,6 +355,22 @@ class ListScreen(Screen):
         ]
         self.empty.text = "" if rows else tr("No tasks to show.")
         self.empty.height = 0 if rows else dp(40)
+
+    def show_connection(self) -> None:
+        """Server mode: a green or red line under the bar; nothing without a server."""
+        api = self.app.api
+        connected = getattr(api, "connected", None)  # the phone's own database has none
+        if not api or not api.base_url:
+            self.connection.text, self.connection.height = "", 0
+            return
+        address = api.base_url.split("://", 1)[-1]
+        if connected is False:
+            text, colour = tr("● No connection to {server}"), CONNECTION_LOST
+        else:
+            text, colour = tr("● Connected to {server}"), CONNECTION_OK
+        self.connection.text = text.format(server=address)
+        self.connection.color = colour
+        self.connection.height = dp(22)
 
 
 class TaskScreen(Screen):
@@ -976,6 +1001,8 @@ class TodoMobileApp(App):
         def finish(result: Any, error: Exception | None) -> None:
             self._busy -= 1
             self._show_busy()
+            if self._list is not None:
+                self._list.show_connection()
             if error is None:
                 if done is not None:
                     done(result)

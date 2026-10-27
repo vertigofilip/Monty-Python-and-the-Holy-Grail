@@ -53,6 +53,8 @@ _POLISH: dict[str, str] = {
     "Log in to a server…": "Zaloguj do serwera…",
     "Log out": "Wyloguj",
     "Logged in:": "Zalogowany:",
+    "● Connected to {server}": "● Połączono z {server}",
+    "● No connection to {server}": "● Brak połączenia z {server}",
     "Refresh": "Odśwież",
     "Where are your tasks?": "Gdzie są Twoje zadania?",
     "On this computer": "Na tym komputerze",
@@ -260,6 +262,8 @@ _POLISH: dict[str, str] = {
     "Activate": "Aktywuj",
     "Close": "Zamknij",
     "The user needs a name.": "Użytkownik musi mieć nazwę.",
+    "Enter a name.": "Wpisz nazwę.",
+    "Could not save.": "Nie udało się zapisać.",
     "Could not save. Another user already has this email.":
         "Nie udało się zapisać. Inny użytkownik ma już ten e-mail.",
     "Select a user first.": "Najpierw wybierz użytkownika.",

@@ -12,21 +12,21 @@ import os
 import queue
 import tkinter as tk
 import tkinter.font as tkfont
-import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from collections.abc import Callable
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from . import i18n, settings
+from . import i18n, management, settings
 from .database import create_all, make_engine, make_session_factory
-from .compression import parse_summary
+from .management import ManagementError
+from .compression import COMPRESSION_NOTE, parse_summary
 from .remote import (
     ApiClient, NotLoggedIn, RemoteAccount, RemoteError, RemoteTaskService, log_in, resume_login,
 )
@@ -43,19 +43,19 @@ from .models import (
     Stage,
     Tag,
     Task,
-    TaskTag,
     Urgency,
     User,
     Workflow,
+)
+from .presets import (  # noqa: F401 - also this module's names, as before
+    DESCENDING_FIRST, SORT_FIELDS, TASK_COLUMNS, FilterPreset, SortPreset, load_presets,
+    load_sort, load_sort_presets, name_taken, parse_sort, save_presets, save_sort,
+    save_sort_presets, sorted_by, text_sort_key,
 )
 from .tray import Tray
 from .seed import add_missing_repeat_rules, repeat_rule_name, seed
 from .services import NONE, TaskService
 
-TASK_COLUMNS = (
-    "Stage", "Due date", "Priority", "Urgency", "Assignee", "Location", "Tags", "Progress",
-    "Repeat",
-)
 # A filter test for one column; a task is shown when every active test passes.
 Predicate = Callable[[Task], bool]
 
@@ -73,15 +73,11 @@ HOME_ENV = "TODO_HOME"
 # How often the window fetches other people's changes in server mode
 # ("sync_seconds" in settings.json overrides it).
 SYNC_SECONDS = 30
+CONNECTION_OK, CONNECTION_LOST = "#2E7D32", "#C62828"  # green, red: the server indicator
 
 # Colours of the "Next stage" button: normal, and under the mouse / pressed.
 NEXT_STAGE_COLOUR = "#2E9E44"
 NEXT_STAGE_ACTIVE = "#23803A"
-
-# Fields the task list can be sorted by: the columns plus the creation time.
-SORT_FIELDS = ("Task", *TASK_COLUMNS, "Created at")
-# Fields that start out descending when added to the sort (most important first).
-DESCENDING_FIRST = {"Priority", "Urgency"}
 
 HISTORY_COLUMNS = ("When", "Who", "Change", "Field", "Old value", "New value")
 
@@ -505,34 +501,19 @@ class UsersDialog(tk.Toplevel):
             entry.delete(0, "end")
             entry.insert(0, text)
 
-    def _form(self) -> tuple[str, str | None] | None:
-        """Name and email from the form, or None if the name is missing."""
-        name = self._name.get().strip()
-        if not name:
-            messagebox.showwarning(tr("Users"), tr("The user needs a name."), parent=self)
-            return None
-        return name, self._email.get().strip() or None
-
-    def _commit(self, user: User) -> None:
-        """Commit the pending change; on failure undo it and show why."""
+    def _change(self, action: Callable[[], User]) -> None:
+        """Make a change (management module); show why if it is refused."""
         try:
-            self.session.commit()
-        except SQLAlchemyError:
-            self.session.rollback()
-            messagebox.showerror(
-                tr("Users"), tr("Could not save. Another user already has this email."), parent=self
-            )
+            user = action()
+        except ManagementError as error:
+            messagebox.showwarning(tr("Users"), str(error), parent=self)
             self.reload()
         else:
             self.reload(user.id)
 
     def add(self) -> None:
         """Create a new user from the form."""
-        form = self._form()
-        if form is not None:
-            user = User(name=form[0], email=form[1])
-            self.session.add(user)
-            self._commit(user)
+        self._change(lambda: management.add_user(self.session, self._name.get(), self._email.get()))
 
     def save(self) -> None:
         """Write the form to the selected user."""
@@ -540,10 +521,9 @@ class UsersDialog(tk.Toplevel):
         if user is None:
             messagebox.showinfo(tr("Users"), tr("Select a user first."), parent=self)
             return
-        form = self._form()
-        if form is not None:
-            user.name, user.email = form
-            self._commit(user)
+        self._change(lambda: management.update_user(
+            self.session, user.id, self._name.get(), self._email.get()
+        ))
 
     def toggle_active(self) -> None:
         """Deactivate or reactivate the selected user."""
@@ -551,14 +531,7 @@ class UsersDialog(tk.Toplevel):
         if user is None:
             messagebox.showinfo(tr("Users"), tr("Select a user first."), parent=self)
             return
-        active = self.session.scalars(select(User).where(User.is_active)).all()
-        if user.is_active and len(active) == 1:
-            messagebox.showwarning(
-                tr("Users"), tr("At least one user must stay active."), parent=self
-            )
-            return
-        user.is_active = not user.is_active
-        self._commit(user)
+        self._change(lambda: management.set_user_active(self.session, user.id, not user.is_active))
 
 
 class WorkflowsDialog(tk.Toplevel):
@@ -671,52 +644,22 @@ class WorkflowsDialog(tk.Toplevel):
         self.wait_window(dialog)
         return dialog.result
 
-    def _commit(self, error: str) -> bool:
-        """Commit the pending change; on failure undo it and show the message."""
+    def _change(self, action: Callable[[], Any]) -> Any:
+        """Make a change (management module); show why and return None if it is refused."""
         try:
-            self.session.commit()
-        except SQLAlchemyError:
-            self.session.rollback()
-            messagebox.showerror(tr("Workflows"), tr(error), parent=self)
-            return False
-        return True
-
-    def _tasks_using(self, stages: list[Stage]) -> int:
-        """Number of tasks that are in one of the stages."""
-        query = select(func.count()).select_from(Task).where(
-            Task.stage_id.in_([stage.id for stage in stages])
-        )
-        return self.session.scalar(query) or 0
-
-    def _reorder(self, stages: list[Stage]) -> None:
-        """Give the stages Order 1..n in list order.
-
-        Goes through negative numbers first, because (WorkflowId, Order) is
-        unique and two stages must never share a number, even for a moment.
-        """
-        for position, stage in enumerate(stages, start=1):
-            stage.order = -position
-        self.session.flush()
-        for position, stage in enumerate(stages, start=1):
-            stage.order = position
+            return action()
+        except ManagementError as error:
+            messagebox.showwarning(tr("Workflows"), str(error), parent=self)
+            return None
 
     # -- workflow actions ---------------------------------------------------
 
     def add_workflow(self) -> None:
         """Create a workflow with a starting "To do" and a final "Done" stage."""
         name = self._ask_name("New workflow")
-        if name is None:
-            return
-        workflow = Workflow(
-            name=name,
-            stages=[
-                Stage(name=tr("To do"), order=1),
-                Stage(name=tr("Done"), order=2, is_final=True),
-            ],
-        )
-        self.session.add(workflow)
-        if self._commit("A workflow with this name already exists."):
-            self.reload(workflow.id)
+        if name is not None:
+            workflow = self._change(lambda: management.add_workflow(self.session, name))
+            self.reload(workflow.id if workflow else None)
 
     def rename_workflow(self) -> None:
         """Rename the selected workflow."""
@@ -725,36 +668,22 @@ class WorkflowsDialog(tk.Toplevel):
             return
         name = self._ask_name("Rename workflow", workflow.name)
         if name is not None:
-            workflow.name = name
-            self._commit("A workflow with this name already exists.")
-            self.reload(workflow.id)
+            workflow_id = workflow.id
+            self._change(lambda: management.rename_workflow(self.session, workflow_id, name))
+            self.reload(workflow_id)
 
     def delete_workflow(self) -> None:
         """Delete the selected workflow and its stages, if no task uses them."""
         workflow = self._workflow()
         if workflow is None:
             return
-        if len(self.workflows.get_children()) == 1:
-            messagebox.showwarning(tr("Workflows"), tr("At least one workflow must remain."), parent=self)
-            return
-        used = self._tasks_using(workflow.stages)
-        if used:
-            messagebox.showwarning(
-                tr("Workflows"),
-                tr('"{name}" is used by {used} task(s) and cannot be deleted.').format(
-                    name=workflow.name, used=used
-                ),
-                parent=self,
-            )
+        if self._change(lambda: management.check_delete_workflow(self.session, workflow.id)) is None:
             return
         question = tr('Delete workflow "{name}"?').format(name=workflow.name)
         if not messagebox.askyesno(tr("Delete"), question, parent=self):
             return
-        for stage in list(workflow.stages):
-            self.session.delete(stage)
-        self.session.flush()
-        self.session.delete(workflow)
-        self._commit("Could not delete the workflow.")
+        workflow_id = workflow.id
+        self._change(lambda: management.delete_workflow(self.session, workflow_id))
         self.reload()
 
     # -- stage actions ------------------------------------------------------
@@ -767,10 +696,9 @@ class WorkflowsDialog(tk.Toplevel):
         name = self._ask_name("New stage")
         if name is None:
             return
-        stage = Stage(workflow_id=workflow.id, name=name, order=len(workflow.stages) + 1)
-        self.session.add(stage)
-        self._commit("Could not add the stage.")
-        self.reload(workflow.id, stage.id)
+        workflow_id = workflow.id
+        stage = self._change(lambda: management.add_stage(self.session, workflow_id, name))
+        self.reload(workflow_id, stage.id if stage else None)
 
     def rename_stage(self) -> None:
         """Rename the selected stage."""
@@ -779,61 +707,39 @@ class WorkflowsDialog(tk.Toplevel):
             return
         name = self._ask_name("Rename stage", stage.name)
         if name is not None:
-            stage.name = name
-            self._commit("Could not rename the stage.")
-            self.reload(stage.workflow_id, stage.id)
+            stage_id, workflow_id = stage.id, stage.workflow_id
+            self._change(lambda: management.rename_stage(self.session, stage_id, name))
+            self.reload(workflow_id, stage_id)
 
     def shift_stage(self, delta: int) -> None:
         """Move the selected stage up or down."""
         stage = self._stage()
         if stage is None:
             return
-        stages = list(stage.workflow.stages)
-        index = stages.index(stage)
-        target = index + delta
-        if 0 <= target < len(stages):
-            stages[index], stages[target] = stages[target], stages[index]
-            self._reorder(stages)
-            self._commit("Could not reorder the stages.")
-        self.reload(stage.workflow_id, stage.id)
+        stage_id, workflow_id = stage.id, stage.workflow_id
+        self._change(lambda: management.shift_stage(self.session, stage_id, delta))
+        self.reload(workflow_id, stage_id)
 
     def toggle_final(self) -> None:
         """Switch whether tasks in the selected stage count as done."""
         stage = self._stage()
         if stage is not None:
-            stage.is_final = not stage.is_final
-            self._commit("Could not change the stage.")
-            self.reload(stage.workflow_id, stage.id)
+            stage_id, workflow_id, final = stage.id, stage.workflow_id, not stage.is_final
+            self._change(lambda: management.set_stage_final(self.session, stage_id, final))
+            self.reload(workflow_id, stage_id)
 
     def delete_stage(self) -> None:
         """Delete the selected stage, if no task is in it."""
         stage = self._stage()
         if stage is None:
             return
-        workflow_id = stage.workflow_id
-        remaining = [other for other in stage.workflow.stages if other is not stage]
-        if not remaining:
-            messagebox.showwarning(
-                tr("Workflows"), tr("A workflow needs at least one stage."), parent=self
-            )
-            return
-        used = self._tasks_using([stage])
-        if used:
-            messagebox.showwarning(
-                tr("Workflows"),
-                tr('"{name}" is used by {used} task(s) and cannot be deleted.').format(
-                    name=stage.name, used=used
-                ),
-                parent=self,
-            )
+        if self._change(lambda: management.check_delete_stage(self.session, stage.id)) is None:
             return
         question = tr('Delete stage "{name}"?').format(name=stage.name)
         if not messagebox.askyesno(tr("Delete"), question, parent=self):
             return
-        self.session.delete(stage)
-        self.session.flush()
-        self._reorder(remaining)
-        self._commit("Could not delete the stage.")
+        stage_id, workflow_id = stage.id, stage.workflow_id
+        self._change(lambda: management.delete_stage(self.session, stage_id))
         self.reload(workflow_id)
 
 
@@ -878,13 +784,7 @@ class TagsDialog(tk.Toplevel):
     def reload(self, select_id: int | None = None) -> None:
         """Reload the tag list with the number of tasks using each tag."""
         self.tags.delete(*self.tags.get_children())
-        usage = (
-            select(Tag, func.count(TaskTag.task_id))
-            .outerjoin(TaskTag, TaskTag.tag_id == Tag.id)
-            .group_by(Tag.id)
-            .order_by(Tag.name)
-        )
-        for tag, used in self.session.execute(usage).tuples():
+        for tag, used in management.tag_usage(self.session):
             self.tags.insert("", "end", iid=str(tag.id), values=(tag.name, used))
         if select_id is not None and self.tags.exists(str(select_id)):
             self.tags.selection_set(str(select_id))
@@ -903,25 +803,20 @@ class TagsDialog(tk.Toplevel):
         self.wait_window(dialog)
         return dialog.result
 
-    def _commit(self, error: str) -> bool:
-        """Commit the pending change; on failure undo it and show the message."""
+    def _change(self, action: Callable[[], Any]) -> Any:
+        """Make a change (management module); show why and return None if it is refused."""
         try:
-            self.session.commit()
-        except SQLAlchemyError:
-            self.session.rollback()
-            messagebox.showerror(tr("Tags"), tr(error), parent=self)
-            return False
-        return True
+            return action()
+        except ManagementError as error:
+            messagebox.showwarning(tr("Tags"), str(error), parent=self)
+            return None
 
     def add_tag(self) -> None:
         """Create a new tag."""
         name = self._ask_name("New tag")
-        if name is None:
-            return
-        tag = Tag(name=name)
-        self.session.add(tag)
-        if self._commit("A tag with this name already exists."):
-            self.reload(tag.id)
+        if name is not None:
+            tag = self._change(lambda: management.add_tag(self.session, name))
+            self.reload(tag.id if tag else None)
 
     def rename_tag(self) -> None:
         """Rename the selected tag; tasks keep it under the new name."""
@@ -931,8 +826,7 @@ class TagsDialog(tk.Toplevel):
         name = self._ask_name("Rename tag", tag.name)
         if name is not None:
             tag_id = tag.id
-            tag.name = name
-            self._commit("A tag with this name already exists.")
+            self._change(lambda: management.rename_tag(self.session, tag_id, name))
             self.reload(tag_id)
 
     def delete_tag(self) -> None:
@@ -940,39 +834,14 @@ class TagsDialog(tk.Toplevel):
         tag = self._selected()
         if tag is None:
             return
-        used = self.session.scalar(
-            select(func.count()).select_from(TaskTag).where(TaskTag.tag_id == tag.id)
-        )
-        if used:
-            messagebox.showwarning(
-                tr("Tags"),
-                tr('"{name}" is used by {used} task(s) and cannot be deleted.').format(
-                    name=tag.name, used=used
-                ),
-                parent=self,
-            )
+        if self._change(lambda: management.check_delete_tag(self.session, tag.id)) is None:
             return
         question = tr('Delete tag "{name}"?').format(name=tag.name)
         if not messagebox.askyesno(tr("Delete"), question, parent=self):
             return
-        self.session.delete(tag)
-        self._commit("Could not delete the tag.")
+        tag_id = tag.id
+        self._change(lambda: management.delete_tag(self.session, tag_id))
         self.reload()
-
-
-# Polish letters with diacritics come right after their base letter (c < ć < d).
-_POLISH_LETTERS = str.maketrans(
-    {"ą": "a~", "ć": "c~", "ę": "e~", "ł": "l~", "ń": "n~", "ó": "o~", "ś": "s~", "ź": "z~", "ż": "z~~"}
-)
-
-
-def text_sort_key(text: str) -> str:
-    """Case-insensitive key that orders text alphabetically, Polish letters included."""
-    text = text.casefold().translate(_POLISH_LETTERS)
-    # Other accented letters (é, ü, ...) sort as their base letter.
-    return "".join(
-        char for char in unicodedata.normalize("NFD", text) if not unicodedata.combining(char)
-    )
 
 
 class ReminderWindow(tk.Toplevel):
@@ -1178,12 +1047,6 @@ class LoginWindow(tk.Tk):
             settings.save_setting(key, value)
         self.result = ("server", account)
         self.destroy()
-
-
-COMPRESSION_NOTE = (
-    "Runs every night at midnight. Old history entries are merged into one summary per task; "
-    "the details are lost."
-)
 
 
 class ServerSettingsDialog(tk.Toplevel):
@@ -1406,18 +1269,6 @@ class Filter:
         return self.test(task)
 
 
-@dataclass(frozen=True)
-class FilterPreset:
-    """Saved filters: the task-name text and the chosen key of each column filter."""
-
-    name: str
-    text: str = ""
-    filters: dict[str, str] = field(default_factory=dict)  # column -> Filter.key
-
-    def as_json(self) -> dict[str, Any]:
-        return {"name": self.name, "text": self.text, "filters": self.filters}
-
-
 def pick_filter(choice: Choice, key: str | None) -> bool:
     """Select the choice whose Filter has this key (None = All); False if there is none."""
     for index, (_label, value) in enumerate(choice._choices):
@@ -1426,73 +1277,6 @@ def pick_filter(choice: Choice, key: str | None) -> bool:
             return True
     choice.current(0)
     return False
-
-
-def load_presets() -> list[FilterPreset]:
-    """The saved filter presets from settings.json; broken entries are skipped."""
-    saved = settings.load_setting("filter_presets")
-    presets: list[FilterPreset] = []
-    for item in saved if isinstance(saved, list) else []:
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
-            continue
-        filters = item.get("filters")
-        presets.append(FilterPreset(
-            item["name"],
-            item["text"] if isinstance(item.get("text"), str) else "",
-            {
-                column: key for column, key in filters.items()
-                if column in TASK_COLUMNS and isinstance(key, str)
-            } if isinstance(filters, dict) else {},
-        ))
-    return presets
-
-
-def save_presets(presets: list[FilterPreset]) -> None:
-    settings.save_setting("filter_presets", [preset.as_json() for preset in presets])
-
-
-@dataclass(frozen=True)
-class SortPreset:
-    """A saved sort order: (field, descending) pairs, most important first."""
-
-    name: str
-    sort: tuple[tuple[str, bool], ...] = ()
-
-    def as_json(self) -> dict[str, Any]:
-        return {"name": self.name, "sort": [[field, descending] for field, descending in self.sort]}
-
-
-def load_sort_presets() -> list[SortPreset]:
-    """The saved sort presets from settings.json; broken entries are skipped."""
-    saved = settings.load_setting("sort_presets")
-    return [
-        SortPreset(item["name"], tuple(parse_sort(item.get("sort"))))
-        for item in (saved if isinstance(saved, list) else [])
-        if isinstance(item, dict) and isinstance(item.get("name"), str)
-    ]
-
-
-def save_sort_presets(presets: list[SortPreset]) -> None:
-    settings.save_setting("sort_presets", [preset.as_json() for preset in presets])
-
-
-def load_sort() -> list[tuple[str, bool]]:
-    """The saved sort order as (field, descending) pairs; [] if none or invalid."""
-    return parse_sort(settings.load_setting("sort"))
-
-
-def parse_sort(saved: Any) -> list[tuple[str, bool]]:
-    """[[field, descending], ...] from settings.json, without unknown or repeated fields."""
-    if not isinstance(saved, list):
-        return []
-    sort: list[tuple[str, bool]] = []
-    for item in saved:
-        if (
-            isinstance(item, list) and len(item) == 2 and item[0] in SORT_FIELDS
-            and item[0] not in [field for field, _ in sort]
-        ):
-            sort.append((item[0], bool(item[1])))
-    return sort
 
 
 class PresetForm(tk.Toplevel):
@@ -1981,6 +1765,9 @@ class TodoApp(tk.Tk):
             ttk.Button(acting, text=tr("Log out"), command=self.log_out).pack(
                 side="left", padx=(8, 0)
             )
+            self._connection = ttk.Label(acting)
+            self._connection.pack(side="left", padx=(12, 0))
+            self._show_connection()
         else:
             ttk.Label(acting, text=tr("Acting as:")).pack(side="left", padx=(12, 6))
             self._user = Choice(acting, self._active_users(), acting_as)
@@ -2333,7 +2120,7 @@ class TodoApp(tk.Tk):
     def apply_sort(self, sort: Any) -> None:
         """Sort the list this way and remember it, as the Sort… window does."""
         self._sort = [tuple(level) for level in sort]  # type: ignore[misc]
-        settings.save_setting("sort", [[field, descending] for field, descending in self._sort])
+        save_sort(self._sort)
         self.refresh()
 
     def _sort_form(
@@ -2429,21 +2216,8 @@ class TodoApp(tk.Tk):
         return task.created_at
 
     def _sorted(self, tasks: list[Task]) -> list[Task]:
-        """Siblings in the chosen sort order; ties keep the manual order.
-
-        Sorts once per field, least important first; Python's sort is
-        stable, so each pass keeps the order of the previous ones for ties.
-        """
-        for field, descending in reversed(self._sort):
-
-            def key(task: Task, field: str = field, descending: bool = descending) -> Any:
-                value = self._sort_value(field, task)
-                missing = value is None
-                # The first item puts tasks without a value last in both directions.
-                return (not missing if descending else missing), (0 if missing else value)
-
-            tasks = sorted(tasks, key=key, reverse=descending)
-        return tasks
+        """Siblings in the chosen sort order; ties keep the manual order."""
+        return sorted_by(tasks, self._sort, self._sort_value)
 
     def _update_headings(self) -> None:
         """Show ▲/▼ (and the level, if several) on the columns being sorted by."""
@@ -2590,12 +2364,15 @@ class TodoApp(tk.Tk):
         try:
             action()
         except NotLoggedIn as error:
+            self._show_connection()
             messagebox.showwarning(tr("To-do list"), str(error), parent=self)
             self.log_out()
             return
         except (ValueError, SQLAlchemyError) as error:
             self.session.rollback()
+            self._show_connection()
             messagebox.showerror(tr("To-do list"), str(error), parent=self)
+        self._show_connection()
         self.refresh()
 
     # -- server connection --------------------------------------------------
@@ -2618,7 +2395,19 @@ class TodoApp(tk.Tk):
                 return
             except RemoteError:
                 pass  # server briefly unreachable: try again next time
+            self._show_connection()
         self.after(self._sync_ms, self._sync_tick)
+
+    def _show_connection(self) -> None:
+        """Server mode: whether the server could be reached the last time it was asked."""
+        if self._account is None:
+            return
+        address = self._account.api.base_url.split("://", 1)[-1]
+        if self._account.api.connected is False:
+            text, colour = tr("● No connection to {server}"), CONNECTION_LOST
+        else:
+            text, colour = tr("● Connected to {server}"), CONNECTION_OK
+        self._connection.configure(text=text.format(server=address), foreground=colour)
 
     # -- reminders ----------------------------------------------------------
 
