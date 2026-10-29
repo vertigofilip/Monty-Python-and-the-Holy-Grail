@@ -29,6 +29,7 @@ from todo_db.database import create_all, make_engine, make_session_factory
 from todo_db.models import (
     ApiToken,
     RepeatRule,
+    SubtaskTemplate,
     Tag,
     Task,
     TaskChange,
@@ -39,6 +40,7 @@ from todo_db.models import (
 )
 from todo_db.seed import add_missing_repeat_rules, seed
 from todo_db.services import TaskService
+from todo_db import templates
 
 from . import dbadmin
 from .maintenance import run_maintenance, scheduler
@@ -51,6 +53,9 @@ from .schemas import (
     PublicUserOut,
     RepeatRuleOut,
     SettingsIO,
+    SubtaskTemplateIn,
+    SubtaskTemplateOut,
+    SubtaskTemplateUpdate,
     TagOut,
     TaskCreate,
     TaskMove,
@@ -232,6 +237,40 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             RepeatRuleOut(**repeat_rule_data(r))
             for r in db.scalars(select(RepeatRule).order_by(RepeatRule.id))
         ]
+
+    # -- subtask templates (shared by everyone; any user may change them) -----------
+
+    def get_template(db: Session, template_id: int) -> None:
+        if db.get(SubtaskTemplate, template_id) is None:
+            raise HTTPException(404, f"Template {template_id} does not exist")
+
+    @app.get("/subtask-templates")
+    def list_templates(_: Me, db: Db) -> list[SubtaskTemplateOut]:
+        return [
+            SubtaskTemplateOut(**templates.template_data(t)) for t in templates.list_templates(db)
+        ]
+
+    @app.post("/subtask-templates", status_code=201)
+    def add_template(body: SubtaskTemplateIn, _: Me, db: Db) -> SubtaskTemplateOut:
+        template = write(lambda: templates.add_template(db, body.model_dump()))
+        return SubtaskTemplateOut(**templates.template_data(template))
+
+    @app.patch("/subtask-templates/{template_id}")
+    def update_template(
+        template_id: int, body: SubtaskTemplateUpdate, _: Me, db: Db
+    ) -> SubtaskTemplateOut:
+        get_template(db, template_id)
+        fields = body.model_dump(exclude_unset=True)
+        if "name" in fields and fields["name"] is None:
+            raise HTTPException(400, "name cannot be empty")
+        template = write(lambda: templates.update_template(db, template_id, fields))
+        return SubtaskTemplateOut(**templates.template_data(template))
+
+    @app.delete("/subtask-templates/{template_id}", status_code=204)
+    def delete_template(template_id: int, _: Me, db: Db) -> Response:
+        get_template(db, template_id)
+        write(lambda: templates.delete_template(db, template_id))
+        return Response(status_code=204)
 
     # -- tasks ------------------------------------------------------------------
 

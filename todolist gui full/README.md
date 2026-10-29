@@ -95,7 +95,7 @@ server with PyInstaller (in its own environment, `build/venv-<system>`):
 |---|---|---|
 | Linux | `python3 build_desktop.py` | `dist/linux/todolist`, `dist/linux/todolist-server` |
 | Windows | `py build_desktop.py` | `dist\windows\todolist.exe`, `dist\windows\todolist-server.exe` |
-| Android | `./build_android.sh` | `android/bin/todolist-1.0-*-debug.apk` |
+| Android | `./build_android.sh` | `android/bin/todolist-1.2-*-debug.apk` |
 | Debian/Ubuntu/Mint | `./build_deb.sh` | `dist/todolist_<version>_amd64.deb` (both programs; `sudo apt install ./dist/todolist_*.deb`) |
 
 PyInstaller builds only for the system it runs on. Without a Windows
@@ -162,6 +162,20 @@ After `sudo nixos-rebuild switch`:
   the login) in `~/.local/share/todolist`; `TODO_HOME=...` chooses another
   folder. A relative `--db` is still taken from where it is started. Its tray
   icon and notifications work without anything else installed.
+
+**Updating** to a newer version: the system's flake pins the to-do list at the
+commit it last fetched (in `/etc/nixos/flake.lock`), so fetch the latest
+pushed version and switch to it:
+
+```bash
+cd /etc/nixos
+sudo nix flake update todolist      # newer Nix; older: sudo nix flake lock --update-input todolist
+sudo nixos-rebuild switch           # restarts todolist-server with the new version
+```
+
+Only what is committed and pushed to GitHub arrives this way (with a local
+`path:` input, the current files). The server's database is kept and gets
+any new tables (e.g. the subtask templates of 1.1) when it starts.
 
 Without installing, from this folder: `nix run path:.` (the desktop program)
 and `nix run path:.#server -- run`. Use `path:`: without it the flake would
@@ -236,7 +250,7 @@ builds in `~/Android/todolist-build` – it takes a while, later builds take a
 minute or two):
 
 ```bash
-./build_android.sh              # -> android/bin/todolist-1.0-*-debug.apk
+./build_android.sh              # -> android/bin/todolist-1.2-*-debug.apk
 ./build_android.sh deploy       # build and install on a USB-connected phone
 ```
 
@@ -298,13 +312,17 @@ but no tasks.
   column: a text box for the task name, and a drop-down for stage (including
   "(not done)" / "(done)"), due date ("(overdue)", "(today)", "(later)"),
   priority, urgency, assignee, location, tag, progress (0 %, 1–99 %, 100 %) and
-  repeat. Filters combine; ✕ clears them all. A parent that
+  repeat. Each drop-down takes several choices: click it and tick them in the
+  list (it stays open; Escape, Enter or a click elsewhere closes it, "All"
+  unticks everything). A task passes a column if it matches any of its ticked
+  choices, so "To do" + "In progress" shows tasks at either stage. Filters of
+  different columns combine; ✕ clears them all. A parent that
   does not match itself is still shown, in grey italics, when one of its
   subtasks matches, and while filtering all shown tasks are expanded.
 - **Filters menu (saved filter presets):** "Save current filters…" stores the
   filters now set under a name; each saved preset is then one click in the
   menu. "Filter presets…" lists them to apply, add, edit (name, task-name text
-  and every column's choice), delete and reorder. Presets are kept only on this
+  and every column's choices), delete and reorder. Presets are kept only on this
   computer, in `settings.json` (`filter_presets`), and work in both modes. They
   remember users, tags and repeat rules by id, so renaming one or switching the
   language does not break them; a choice that no longer exists is set to "All"
@@ -339,6 +357,24 @@ but no tasks.
 - **Manage → Tags…** adds, renames and deletes tags and shows how many tasks
   use each one. A tag still used by tasks cannot be deleted; remove it from
   those tasks first. Renaming does not rewrite history.
+- **Random task** draws a task to do next and shows it (name, parent tasks,
+  priority, urgency, stage, due date, description). Only unfinished tasks
+  without subtasks take part. More important and urgent tasks come up more
+  often; from the most to the least favoured: Important+High, Normal+High,
+  Important+Medium, Normal+Medium, Important+Low, Normal+Low, Maybe+High,
+  Maybe+Medium, Maybe+Low (weights 9 down to 1, `todo_db/pick.py`). "Another"
+  draws a different one; "Show in list" selects it (clearing the filters if
+  they hide it). The phone has the same button under the task list.
+- **Subtask templates:** ready-made subtasks (name, description, priority,
+  urgency). **From template…** (toolbar) opens the list for the selected task:
+  choose one or several (Ctrl/Shift+click) and press "Add as subtasks", or
+  double-click one. Each becomes an ordinary subtask at the first stage of the
+  parent's workflow, assigned to the parent's assignee. The same window edits
+  the list (Add / Save / Delete / Clear); **Manage → Subtask templates…** opens
+  it just for editing. Templates are kept in the database (the local file, or
+  the server, where every user shares and may change them); deleting one
+  leaves the subtasks made from it. On the phone: "From template…" on a task,
+  and "Subtask templates…" in the menu.
 
 - **Language** switches the interface between English and Polish at once. The
   choice is saved in `settings.json` in the current directory; without it the
@@ -455,6 +491,7 @@ language, add it to `LANGUAGES` and add its dictionary to `_TRANSLATIONS`;
 | `todo_db/models.py` | Models and enums |
 | `todo_db/database.py` | Engine (foreign keys ON), session factory, `create_all()` |
 | `todo_db/services.py` | `TaskService` — all task writes and their history |
+| `todo_db/templates.py` | Subtask templates (shared by the program, the server and the phone) |
 | `todo_db/seed.py` | Sample data |
 | `todo_db/main.py` | Demo |
 | `todo_db/app.py` | The to-do program (Tkinter GUI) |
@@ -633,6 +670,7 @@ travel unencrypted.
 | Everyone | `POST /auth/login` |
 | Logged in | `GET /auth/me`, `POST /auth/logout`, `GET /users`, `GET /workflows`, `GET /tags`, `GET /repeat-rules` |
 | Logged in | `GET/POST /tasks`, `GET/PATCH/DELETE /tasks/{id}`, `POST /tasks/{id}/move`, `GET /tasks/{id}/history` |
+| Logged in | `GET/POST /subtask-templates`, `PATCH/DELETE /subtask-templates/{id}` |
 | Admin | `GET/POST /admin/users`, `PATCH /admin/users/{id}` |
 | Admin | `GET/PUT /admin/settings`, `POST /admin/history/compress`, `POST /admin/tasks/{id}/history/compress`, `POST /admin/maintenance/run` |
 | Admin | `GET /admin/database`, `POST /admin/database/backup`, `GET /admin/database/backups`, `GET /admin/database/backups/{name}`, `POST /admin/database/vacuum` |

@@ -23,9 +23,31 @@ SORT_FIELDS = ("Task", *TASK_COLUMNS, "Created at")
 DESCENDING_FIRST = {"Priority", "Urgency"}
 
 
+# One column's saved filter: a key, or a list of keys when several are chosen (a
+# task then passes if it matches any of them). One key stays a plain string, so
+# presets saved before several could be chosen still load, and the other way round.
+FilterValue = str | list[str]
+
+
+def filter_keys(value: Any) -> list[str]:
+    """The keys of one column's saved filter ([] = all tasks pass)."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [key for key in value if isinstance(key, str)]
+    return []
+
+
+def filter_value(keys: list[str]) -> FilterValue | None:
+    """How chosen keys are saved: None for none, the key for one, else the list."""
+    if not keys:
+        return None
+    return keys[0] if len(keys) == 1 else list(keys)
+
+
 @dataclass(frozen=True)
 class FilterPreset:
-    """Saved filters: the search text and the chosen key of each column filter.
+    """Saved filters: the search text and the chosen keys of each column filter.
 
     Keys do not depend on the language or on names that can be changed:
     "not-done", "overdue", "Important", "id:3" (a user, tag or repeat rule).
@@ -33,7 +55,7 @@ class FilterPreset:
 
     name: str
     text: str = ""
-    filters: dict[str, str] = field(default_factory=dict)  # column -> filter key
+    filters: dict[str, FilterValue] = field(default_factory=dict)  # column -> key(s)
 
     def as_json(self) -> dict[str, Any]:
         return {"name": self.name, "text": self.text, "filters": self.filters}
@@ -51,8 +73,8 @@ def load_presets() -> list[FilterPreset]:
             item["name"],
             item["text"] if isinstance(item.get("text"), str) else "",
             {
-                column: key for column, key in filters.items()
-                if column in TASK_COLUMNS and isinstance(key, str)
+                column: value for column, saved in filters.items()
+                if column in TASK_COLUMNS and (value := filter_value(filter_keys(saved)))
             } if isinstance(filters, dict) else {},
         ))
     return presets

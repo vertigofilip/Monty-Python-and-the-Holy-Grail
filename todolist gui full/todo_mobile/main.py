@@ -39,7 +39,7 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.togglebutton import ToggleButton
 from kivy.utils import platform
 
-from todo_db import i18n, reminder_core, settings
+from todo_db import i18n, pick, reminder_core, settings, templates
 from todo_db.i18n import tr
 from todo_db.reminder_core import DueTask, Reminders
 
@@ -48,7 +48,8 @@ from todo_mobile import storage
 from todo_mobile.reminder_service import MAX_LINES, SAVED_TASKS, find_due_tasks
 from todo_mobile.tasks import (
     NONE, PRIORITIES, SHOW_CHOICES, SHOW_OPEN, URGENCIES, final_stage_id, history_lines,
-    is_overdue, next_stage_id, parse_due, repeat_label, sorted_rules, task_details, task_rows,
+    is_due_today, is_overdue, next_stage_id, parse_due, repeat_label, sorted_rules, task_details,
+    task_rows,
 )
 
 SYNC_SECONDS = 30
@@ -97,8 +98,10 @@ Builder.load_string("""
         shorten_from: "right"
     Label:
         text: root.details_text
+        markup: True
         font_size: "13sp"
-        color: (1, 0.42, 0.42, 1) if root.overdue else (0.6, 0.65, 0.75, 1)
+        # Red: overdue, green: due today (as on the computer), else grey-blue.
+        color: (1, 0.42, 0.42, 1) if root.overdue else ((0.4, 0.85, 0.45, 1) if root.due_today else (0.6, 0.65, 0.75, 1))
         text_size: self.width, None
         halign: "left"
         shorten: True
@@ -125,6 +128,7 @@ class TaskRow(ButtonBehavior, BoxLayout):
     done = BooleanProperty(False)
     matches = BooleanProperty(True)
     overdue = BooleanProperty(False)
+    due_today = BooleanProperty(False)  # shown green, as overdue ones are red
     index = NumericProperty(0)
     task_id = NumericProperty(0)
 
@@ -329,7 +333,10 @@ class ListScreen(Screen):
         layout.add_widget(self.list)
         self.empty = Label(text="", size_hint_y=None, height=0, color=(0.6, 0.6, 0.6, 1))
         layout.add_widget(self.empty)
-        layout.add_widget(button(tr("New task"), lambda: app.open_task(None), height=dp(56)))
+        actions = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(4))
+        actions.add_widget(button(tr("New task"), lambda: app.open_task(None), height=dp(56)))
+        actions.add_widget(button(tr("Random task"), app.random_task, height=dp(56)))
+        layout.add_widget(actions)
         self.add_widget(layout)
 
     def show(self) -> None:
@@ -343,8 +350,9 @@ class ListScreen(Screen):
         self.list.data = [
             {
                 "name_text": row.task["name"],
-                "details_text": task_details(row.task, today),
+                "details_text": task_details(row.task, today, markup=True),
                 "overdue": is_overdue(row.task, today),
+                "due_today": is_due_today(row.task, today),
                 "depth": row.depth,
                 "done": row.task["done"],
                 "matches": row.matches,
@@ -455,6 +463,7 @@ class TaskScreen(Screen):
             for text, action in (
                 (tr("Complete"), self.complete),
                 (tr("New subtask"), lambda: app.open_task(None, parent=task)),
+                (tr("From template…"), lambda: app.open_templates(task)),
                 (tr("History"), lambda: app.open_history(task)),
                 (tr("Delete"), self.delete),
             ):
@@ -616,6 +625,119 @@ class DatePopup(Popup):
         self.on_pick(day)
 
 
+class TemplatesScreen(Screen):
+    """The editable list of subtask templates; for a task also: add chosen ones as subtasks."""
+
+    def __init__(self, app: TodoMobileApp, items: list[dict[str, Any]],
+                 parent: dict[str, Any] | None = None, chosen: set[int] | None = None) -> None:
+        super().__init__(name="templates")
+        self.app, self.items, self.parent_task = app, items, parent
+        chosen = chosen or set()
+        layout = BoxLayout(orientation="vertical")
+        layout.add_widget(top_bar(tr("Subtask templates"), button(tr("Back"), app.go_back)))
+        scroll, column = scrolling_column()
+        if parent:
+            column.add_widget(label(tr('Add subtasks to "{name}":').format(name=parent["name"]),
+                                    color=(0.7, 0.75, 0.85, 1)))
+        if not items:
+            column.add_widget(label(tr("No templates yet."), color=GREY))
+        self.toggles: dict[int, ToggleButton] = {}
+        for item in items:
+            row = BoxLayout(size_hint_y=None, height=ROW, spacing=dp(6))
+            text = f"{item['name']}  ·  {tr(item['priority'])} / {tr(item['urgency'])}"
+            if parent:
+                toggle = ToggleButton(text=text, state="down" if item["id"] in chosen else "normal",
+                                      shorten=True, halign="left")
+                toggle.bind(size=lambda w, size: setattr(w, "text_size", (size[0] - dp(16), None)))
+                self.toggles[item["id"]] = toggle
+                row.add_widget(toggle)
+                row.add_widget(button(tr("Edit"), lambda i=item: self.edit(i), size_hint_x=None,
+                                      width=dp(90)))
+            else:
+                row.add_widget(button(text, lambda i=item: self.edit(i)))
+            column.add_widget(row)
+        column.add_widget(button(tr("New template"), lambda: self.edit(None)))
+        layout.add_widget(scroll)
+        if parent:
+            layout.add_widget(button(tr("Add as subtasks"), self.add_subtasks, height=dp(56),
+                                     background_normal="", background_color=GREEN))
+        self.add_widget(layout)
+
+    def _chosen(self) -> set[int]:
+        return {item_id for item_id, toggle in self.toggles.items() if toggle.state == "down"}
+
+    def edit(self, item: dict[str, Any] | None) -> None:
+        """A form for a new template, or to change or delete one."""
+        name = text_input(item["name"] if item else "")
+        description = text_input(item["description"] or "" if item else "", multiline=True,
+                                 height=dp(90))
+        priority = Choice([(tr(p), p) for p in PRIORITIES], item["priority"] if item else "Normal")
+        urgency = Choice([(tr(u), u) for u in URGENCIES], item["urgency"] if item else "Medium")
+
+        def save() -> None:
+            fields = {"name": name.text.strip(), "description": description.text.strip() or None,
+                      "priority": priority.value, "urgency": urgency.value}
+            if not fields["name"]:
+                self.app.message(tr("Enter a name."))
+                return
+            popup.dismiss()
+            if item:
+                self._send("PATCH", f"/subtask-templates/{item['id']}", fields)
+            else:
+                self._send("POST", "/subtask-templates", fields)
+
+        def delete() -> None:
+            popup.dismiss()
+            self.app.confirm(
+                tr("Delete template(s) {names}?").format(names=f'"{item["name"]}"'),
+                lambda: self._send("DELETE", f"/subtask-templates/{item['id']}"),
+            )
+
+        buttons = BoxLayout(size_hint_y=None, height=ROW, spacing=dp(8))
+        buttons.add_widget(button(tr("Cancel"), lambda: popup.dismiss()))
+        if item:
+            buttons.add_widget(button(tr("Delete"), delete))
+        buttons.add_widget(button(tr("Save"), save))
+        popup = self.app._popup(
+            tr("Subtask templates"),
+            form_row(tr("Name"), name), form_row(tr("Description"), description),
+            form_row(tr("Priority"), priority), form_row(tr("Urgency"), urgency), buttons,
+        )
+
+    def _send(self, method: str, path: str, body: Any = None) -> None:
+        """Change a template, then show the list again (keeping what was chosen)."""
+        api, chosen = self.app.api, self._chosen()
+
+        def job() -> list[dict[str, Any]]:
+            api.request(method, path, body)
+            return api.request("GET", "/subtask-templates")
+
+        self.app.work(job, lambda items: self.app.show_templates(items, self.parent_task, chosen))
+
+    def add_subtasks(self) -> None:
+        chosen = [item for item in self.items if item["id"] in self._chosen()]
+        if not chosen:
+            self.app.message(tr("Select a template first."))
+            return
+        task = self.parent_task
+        workflow = next(w for w in self.app.data["workflows"] if w["id"] == task["workflow_id"])
+        first = min(workflow["stages"], key=lambda stage: stage["order"])
+        parent = {"id": task["id"], "first_stage_id": first["id"],
+                  "assignee_id": task["assignee_id"]}
+        api = self.app.api
+
+        def job() -> dict[str, Any]:
+            for item in chosen:
+                api.request("POST", "/tasks", templates.subtask_fields(item, parent))
+            return api.load_all()
+
+        def done(data: dict[str, Any]) -> None:
+            self.app.data = data
+            self.app.show_list()
+
+        self.app.work(job, done)
+
+
 class HistoryScreen(Screen):
     def __init__(self, app: TodoMobileApp, task: dict[str, Any],
                  changes: list[dict[str, Any]]) -> None:
@@ -703,6 +825,11 @@ class TodoMobileApp(App):
         Clock.schedule_once(lambda _dt: self._drop_hidden(), 0.5)
 
     def go_back(self) -> None:
+        if self._on(TemplatesScreen) and self.screens.current_screen.parent_task:
+            task = self._task(self.screens.current_screen.parent_task["id"])
+            if task is not None:
+                self._show(TaskScreen(self, task), forward=False)
+                return
         if self._on(HistoryScreen):
             task = self._task(self._history_task_id)
             if task is not None:
@@ -717,7 +844,7 @@ class TodoMobileApp(App):
         if self._open_popup is not None:
             self._open_popup.dismiss()
             return True
-        if self._on(TaskScreen) or self._on(HistoryScreen):
+        if self._on(TaskScreen) or self._on(HistoryScreen) or self._on(TemplatesScreen):
             self.go_back()
             return True
         return False
@@ -732,6 +859,16 @@ class TodoMobileApp(App):
         self._history_task_id = task["id"]
         self.work(lambda: self.api.request("GET", f"/tasks/{task['id']}/history"),
                   lambda changes: self._show(HistoryScreen(self, task, changes)))
+
+    def open_templates(self, task: dict[str, Any] | None = None) -> None:
+        """The subtask templates: to add some to the task, or (no task) to change the list."""
+        api = self.api
+        self.work(lambda: api.request("GET", "/subtask-templates"),
+                  lambda items: self.show_templates(items, task))
+
+    def show_templates(self, items: list[dict[str, Any]], task: dict[str, Any] | None = None,
+                       chosen: set[int] | None = None) -> None:
+        self._show(TemplatesScreen(self, items, task, chosen))
 
     def _task(self, task_id: int | None) -> dict[str, Any] | None:
         return next((t for t in self.data.get("tasks", []) if t["id"] == task_id), None)
@@ -1075,6 +1212,47 @@ class TodoMobileApp(App):
         popup.open()
         return popup
 
+    def random_task(self, previous_id: int | None = None) -> None:
+        """Show a task drawn at random (todo_db.pick): unfinished, without subtasks.
+
+        previous_id: the task shown before; another one is drawn if there is one.
+        """
+        tasks = self.data.get("tasks", []) if self.data else []
+        parents = {task["parent_id"] for task in tasks}
+        candidates = [task for task in tasks if not task["done"] and task["id"] not in parents]
+        if previous_id is not None and len(candidates) > 1:
+            candidates = [task for task in candidates if task["id"] != previous_id]
+        task = pick.pick_task(candidates, lambda t: (t["priority"], t["urgency"]))
+        if task is None:
+            self.message(tr("There are no unfinished tasks without subtasks."))
+            return
+        by_id = {item["id"]: item for item in tasks}
+        path, parent = [], by_id.get(task["parent_id"])
+        while parent is not None:
+            path.insert(0, parent["name"])
+            parent = by_id.get(parent["parent_id"])
+
+        def again() -> None:
+            popup.dismiss()
+            self.random_task(task["id"])
+
+        def open_it() -> None:
+            popup.dismiss()
+            self.open_task(task["id"])
+
+        widgets = [label(task["name"], bold=True, font_size="20sp")]
+        if path:
+            widgets.append(label(" › ".join(path), color=GREY))
+        widgets.append(label(task_details(task, markup=True), markup=True))
+        if task["description"]:
+            widgets.append(label(task["description"]))
+        buttons = BoxLayout(size_hint_y=None, height=ROW, spacing=dp(8))
+        buttons.add_widget(button(tr("Close"), lambda: popup.dismiss()))
+        buttons.add_widget(button(tr("Open"), open_it))
+        buttons.add_widget(button(tr("Another"), again, background_normal="",
+                                  background_color=GREEN))
+        popup = self._popup(tr("Random task"), *widgets, buttons)
+
     def message(self, text: str) -> None:
         close = button(tr("OK"), lambda: popup.dismiss())
         popup = self._popup(tr("To-do list"), label(text), close)
@@ -1099,6 +1277,10 @@ class TodoMobileApp(App):
             popup.dismiss()
             self.show_database_place()
 
+        def manage_templates() -> None:
+            popup.dismiss()
+            self.open_templates()
+
         extra = []
         if self.local:
             where = (f"{tr('Tasks on this phone only, without a server.')}\n"
@@ -1120,6 +1302,7 @@ class TodoMobileApp(App):
             label(where),
             form_row(tr("Language"), self.language_choice()),
             reminders,
+            button(tr("Subtask templates…"), manage_templates),
             *extra,
             button(leave, log_out),
             button(tr("Close"), lambda: popup.dismiss()),

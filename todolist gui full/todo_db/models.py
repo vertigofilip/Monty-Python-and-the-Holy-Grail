@@ -223,6 +223,26 @@ class Task(Base):
     tags: Mapped[list[Tag]] = relationship(secondary="TaskTag")
 
 
+class SubtaskTemplate(Base):
+    """A ready-made subtask ("Write tests", "Pack the car") to add to any task.
+
+    Shared by all users of a database (or server); adding one creates an
+    ordinary subtask with these fields, in the parent's workflow.
+    """
+
+    __tablename__ = "SubtaskTemplate"
+
+    id: Mapped[int] = mapped_column("Id", primary_key=True)
+    name: Mapped[str] = mapped_column("Name", unique=True)
+    description: Mapped[str | None] = mapped_column("Description", Text)
+    priority: Mapped[Priority] = mapped_column(
+        "Priority", IntEnumType(Priority), default=Priority.Normal
+    )
+    urgency: Mapped[Urgency] = mapped_column(
+        "Urgency", IntEnumType(Urgency), default=Urgency.Medium
+    )
+
+
 class TaskChange(Base):
     """One entry of the task history / audit log."""
 

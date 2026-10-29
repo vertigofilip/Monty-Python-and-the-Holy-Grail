@@ -17,7 +17,9 @@ from sqlalchemy import select  # noqa: E402
 
 from todo_db import remote  # noqa: E402
 from todo_db.database import make_session_factory  # noqa: E402
-from todo_db.models import ChangeType, Priority, Stage, Task, User, UserRole, Workflow  # noqa: E402
+from todo_db.models import (  # noqa: E402
+    ChangeType, Priority, Stage, Task, Urgency, User, UserRole, Workflow,
+)
 from todo_db.remote import NotLoggedIn, RemoteError, RemoteTaskService, log_in  # noqa: E402
 from todo_server.api import ServerConfig, create_app  # noqa: E402
 from todo_server.security import hash_password  # noqa: E402
@@ -208,3 +210,45 @@ def test_window_shows_whether_the_server_is_reached(server: str) -> None:
         assert app._connection.cget("text") == f"● Connected to {address}"
     finally:
         app.destroy()
+
+
+def test_window_adds_subtasks_from_the_servers_templates(
+    server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tk = pytest.importorskip("tkinter")
+
+    from todo_db import app as todo_app
+
+    try:
+        tk.Tk().destroy()
+    except tk.TclError:
+        pytest.skip("no display")
+    account = log_in(server, "ola@example.com", PASSWORD, remember=False)
+    store = todo_app.RemoteTemplates(account.api)
+    pack = store.add({"name": "Pack", "priority": "Important"})
+    assert store.update(pack["id"], {"urgency": "High"})["urgency"] == "High"
+    assert [t["name"] for t in store.list()] == ["Pack"]
+
+    service = RemoteTaskService(account)
+    parent = service.create_task("Trip", stage_id(account, "Software", "Review"), 0)
+    app = todo_app.TodoApp(account=account)
+    try:
+        class Picked:  # the templates window, with "Pack" chosen
+            def __init__(self, _master: object, chosen_from: object, parent_name: str) -> None:
+                assert isinstance(chosen_from, todo_app.RemoteTemplates)
+                self.chosen = chosen_from.list()
+
+        monkeypatch.setattr(todo_app, "SubtaskTemplatesDialog", Picked)
+        monkeypatch.setattr(app, "wait_window", lambda _dialog: None)
+        app.tree.selection_set(str(parent.id))
+        app.subtasks_from_template()
+        trip = account.mirror.session.get(Task, parent.id)
+        (subtask,) = trip.subtasks
+        assert (subtask.name, subtask.priority, subtask.urgency, subtask.stage.name) == (
+            "Pack", Priority.Important, Urgency.High, "Idea"  # the first stage of Software
+        )
+        assert subtask.assignee_id == trip.assignee_id == account.user["id"]
+    finally:
+        app.destroy()
+    store.delete(pack["id"])
+    assert store.list() == []

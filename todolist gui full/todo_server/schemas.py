@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 from datetime import date, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field
 
@@ -102,6 +102,36 @@ class RepeatRuleOut(BaseModel):
     name: str
     interval: int
     unit: str
+
+
+# -- subtask templates ------------------------------------------------------------
+
+PriorityName = Literal["Maybe", "Normal", "Important"]
+UrgencyName = Literal["Low", "Medium", "High"]
+
+
+class SubtaskTemplateIn(BaseModel):
+    name: Name
+    description: str | None = None
+    priority: PriorityName = "Normal"
+    urgency: UrgencyName = "Medium"
+
+
+class SubtaskTemplateUpdate(BaseModel):
+    """Only the fields sent are changed."""
+
+    name: Name | None = None
+    description: str | None = None
+    priority: PriorityName | None = None
+    urgency: UrgencyName | None = None
+
+
+class SubtaskTemplateOut(BaseModel):
+    id: int
+    name: str
+    description: str | None
+    priority: str
+    urgency: str
 
 
 # -- tasks ----------------------------------------------------------------------

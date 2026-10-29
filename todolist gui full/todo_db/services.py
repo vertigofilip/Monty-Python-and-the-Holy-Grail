@@ -261,13 +261,22 @@ class TaskService:
         return list(self.session.scalars(query))
 
     def get_progress_percent(self, task_id: int) -> float:
-        """Share of finished subtasks, or the stage position within the workflow."""
+        """How far the task is, 0-100.
+
+        With subtasks: the share of them that are done (in their workflow's last,
+        final stage). Without: the position of its stage in the workflow, from 0%
+        at the first stage up to 100% at the last one (or any final stage).
+        """
         task = self._get(Task, task_id)
         if task.subtasks:
             done = sum(1 for subtask in task.subtasks if subtask.stage.is_final)
             return 100 * done / len(task.subtasks)
+        if task.stage.is_final:
+            return 100
         stages = task.stage.workflow.stages
-        return 100 * (stages.index(task.stage) + 1) / len(stages)
+        if len(stages) < 2:
+            return 0
+        return 100 * stages.index(task.stage) / (len(stages) - 1)
 
     # -- helpers ------------------------------------------------------------
 

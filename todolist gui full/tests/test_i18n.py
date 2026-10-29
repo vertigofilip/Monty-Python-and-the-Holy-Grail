@@ -16,7 +16,7 @@ from todo_db.services import NONE, UPDATABLE
 
 APP_SOURCE = "".join(
     Path(i18n.__file__).with_name(name).read_text(encoding="utf-8")
-    for name in ("app.py", "management.py", "presets.py", "remote.py", "reminders.py", "tray.py")
+    for name in ("app.py", "management.py", "presets.py", "templates.py", "pick.py", "remote.py", "reminders.py", "tray.py")
 ) + "".join(
     path.read_text(encoding="utf-8")
     for path in sorted((Path(i18n.__file__).parent.parent / "todo_mobile").glob("*.py"))

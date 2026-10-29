@@ -140,14 +140,23 @@ def test_delete_keeps_history_and_closes_gap(
 
 
 def test_progress_from_stage_position(service: TaskService, world: World) -> None:
+    # Idea, Planned, In progress, Done: 0% at the first stage, up in equal steps, 100% at the last.
     task = service.create_task("Feature", world.idea, world.anna)
-    assert service.get_progress_percent(task.id) == 25
+    assert service.get_progress_percent(task.id) == 0
+
+    service.update_task(task.id, world.anna, stage_id=world.planned)
+    assert service.get_progress_percent(task.id) == pytest.approx(100 / 3)
 
     service.update_task(task.id, world.anna, stage_id=world.in_progress)
-    assert service.get_progress_percent(task.id) == 75
+    assert service.get_progress_percent(task.id) == pytest.approx(200 / 3)
 
     service.update_task(task.id, world.anna, stage_id=world.soft_done)
     assert service.get_progress_percent(task.id) == 100
+
+    simple = service.create_task("Errand", world.todo, world.anna)  # To do, Done
+    assert service.get_progress_percent(simple.id) == 0
+    service.update_task(simple.id, world.anna, stage_id=world.done)
+    assert service.get_progress_percent(simple.id) == 100
 
 
 def test_progress_from_subtasks(service: TaskService, world: World) -> None:
@@ -158,6 +167,8 @@ def test_progress_from_subtasks(service: TaskService, world: World) -> None:
     ]
     assert service.get_progress_percent(parent.id) == 0
 
+    # The parent's own stage does not count, only the share of subtasks at the last stage.
+    service.update_task(parent.id, world.anna, stage_id=world.in_progress)
     service.update_task(subs[0].id, world.anna, stage_id=world.done)
     assert service.get_progress_percent(parent.id) == 25
 

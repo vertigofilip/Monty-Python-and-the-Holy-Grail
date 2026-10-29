@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from todo_db.api_data import (
     change_data, public_user_data, repeat_rule_data, tag_data, task_data, workflow_data,
 )
-from todo_db import management
+from todo_db import management, templates
 from todo_db.database import create_all, make_engine, make_session_factory
 from todo_db.i18n import tr
 from todo_db.models import Priority, RepeatRule, Stage, Tag, Task, Urgency, User, Workflow
@@ -33,6 +33,8 @@ from todo_db.services import TaskService
 from .api import RemoteError
 
 LOCAL_USER = "Me"  # the name of the phone's only user (translated when it is created)
+# Requests answered by _manage.
+MANAGED = ("/admin/users", "/workflows", "/stages", "/tags", "/subtask-templates")
 
 
 def _json(data: Any) -> Any:
@@ -134,7 +136,7 @@ class LocalApi:
             task = service.create_task(fields.pop("name"), fields.pop("stage_id"), user_id, **fields)
             return task_data(service, task)
 
-        if path.startswith(("/admin/users", "/workflows", "/stages", "/tags")):
+        if path.startswith(MANAGED):
             return self._manage(session, method, path, body)
 
         match = re.fullmatch(r"/tasks/(\d+)(/history|/move)?", path)
@@ -163,7 +165,10 @@ class LocalApi:
         raise RemoteError(tr("Server error {code}").format(code=405))
 
     def _manage(self, session: Session, method: str, path: str, body: dict[str, Any]) -> Any:
-        """Users, workflows, stages and tags (on the server only users, by administrators)."""
+        """Users, workflows, stages, tags and subtask templates.
+
+        On the server only users (by administrators) and the templates (by anyone).
+        """
         route = re.sub(r"/\d+", "/{id}", path)
         ids = [int(number) for number in re.findall(r"/(\d+)", path)]
         name = body.get("name") or ""
@@ -216,6 +221,15 @@ class LocalApi:
             return tag_data(management.rename_tag(session, ids[0], name))
         if (method, route) == ("DELETE", "/tags/{id}"):
             management.delete_tag(session, ids[0])
+            return None
+        if (method, route) == ("GET", "/subtask-templates"):
+            return [templates.template_data(t) for t in templates.list_templates(session)]
+        if (method, route) == ("POST", "/subtask-templates"):
+            return templates.template_data(templates.add_template(session, body))
+        if (method, route) == ("PATCH", "/subtask-templates/{id}"):
+            return templates.template_data(templates.update_template(session, ids[0], body))
+        if (method, route) == ("DELETE", "/subtask-templates/{id}"):
+            templates.delete_template(session, ids[0])
             return None
         raise RemoteError(tr("Server error {code}").format(code=404))
 

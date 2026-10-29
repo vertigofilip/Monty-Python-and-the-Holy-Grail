@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the phone app as an Android package (.apk).
 #
-#   ./build_android.sh            build android/bin/todolist-1.0-*-debug.apk
+#   ./build_android.sh            build android/bin/todolist-1.2-*-debug.apk
 #   ./build_android.sh deploy     build and install on a phone connected by USB
 #   ./build_android.sh clean      remove the build (the next one starts over)
 #
@@ -92,7 +92,7 @@ rm -rf "$BUILD/recipes"
 cp -r android/recipes "$BUILD/"
 cp android/{main,reminder_service}.py "$BUILD/src/"
 cp todo_mobile/{__init__,api,tasks,local,storage,reminder_service,main}.py "$BUILD/src/todo_mobile/"
-cp todo_db/{__init__,i18n,settings,models,database,services,seed,compression,api_data,reminder_core,presets,management}.py "$BUILD/src/todo_db/"
+cp todo_db/{__init__,i18n,settings,models,database,services,seed,compression,api_data,reminder_core,presets,management,templates,pick}.py "$BUILD/src/todo_db/"
 cp todo_db/logo.png "$BUILD/"  # the app's icon (icon.filename in buildozer.spec)
 # Pure-Python libraries the app needs, from this project's .venv (see buildozer.spec).
 if ! .venv/bin/python -c "import filetype, typing_extensions" 2>/dev/null; then
@@ -131,6 +131,8 @@ case ${1:-debug} in
     *) echo "Unknown command: $1 (debug, deploy or clean)" >&2; exit 1 ;;
 esac
 mkdir -p android/bin
-cp "$BUILD"/bin/*.apk android/bin/
+# Only this version's APK: the build folder also keeps those of earlier versions.
+version=$(sed -n 's/^version = //p' android/buildozer.spec)
+cp "$BUILD"/bin/todolist-"$version"-*.apk android/bin/
 echo "Ready:"
-ls -1 android/bin/*.apk
+ls -1 android/bin/todolist-"$version"-*.apk

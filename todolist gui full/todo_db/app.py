@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from . import i18n, management, settings
+from . import i18n, management, pick, settings, templates
 from .database import create_all, make_engine, make_session_factory
 from .management import ManagementError
 from .compression import COMPRESSION_NOTE, parse_summary
@@ -48,9 +48,9 @@ from .models import (
     Workflow,
 )
 from .presets import (  # noqa: F401 - also this module's names, as before
-    DESCENDING_FIRST, SORT_FIELDS, TASK_COLUMNS, FilterPreset, SortPreset, load_presets,
-    load_sort, load_sort_presets, name_taken, parse_sort, save_presets, save_sort,
-    save_sort_presets, sorted_by, text_sort_key,
+    DESCENDING_FIRST, SORT_FIELDS, TASK_COLUMNS, FilterPreset, SortPreset, filter_keys,
+    filter_value, load_presets, load_sort, load_sort_presets, name_taken, parse_sort,
+    save_presets, save_sort, save_sort_presets, sorted_by, text_sort_key,
 )
 from .tray import Tray
 from .seed import add_missing_repeat_rules, repeat_rule_name, seed
@@ -75,9 +75,18 @@ HOME_ENV = "TODO_HOME"
 SYNC_SECONDS = 30
 CONNECTION_OK, CONNECTION_LOST = "#2E7D32", "#C62828"  # green, red: the server indicator
 
+# Unfinished tasks due today, in the task list (overdue ones are red).
+DUE_TODAY_COLOUR = "#1E8C3A"
+
 # Colours of the "Next stage" button: normal, and under the mouse / pressed.
 NEXT_STAGE_COLOUR = "#2E9E44"
 NEXT_STAGE_ACTIVE = "#23803A"
+
+# Background of the Priority and Urgency cells in the task list, by level (the value
+# of Priority and Urgency): low (Maybe, Low) green, middle (Normal, Medium) yellow,
+# high (Important, High) red.
+LEVEL_COLOURS = {0: "#B9E4BC", 1: "#FFE98A", 2: "#F8B4B4"}
+LEVEL_COLUMNS = ("Priority", "Urgency")
 
 HISTORY_COLUMNS = ("When", "Who", "Change", "Field", "Old value", "New value")
 
@@ -92,6 +101,68 @@ def repeat_label(rule: RepeatRule) -> str:
 def repeat_sort_key(rule: RepeatRule) -> tuple[int, int]:
     """Order rules by unit (days first), then by interval."""
     return list(RepeatUnit).index(rule.unit), rule.interval
+
+
+class TreeTooltip:
+    """A small window with a row's text, shown when the mouse rests over a row of a Treeview.
+
+    text(iid) gives the text of a row; nothing is shown when it is empty. The
+    window goes when the mouse moves to another row, leaves the list, or clicks.
+    """
+
+    DELAY_MS = 700  # how long the mouse must rest over a row
+    WIDTH = 400  # pixels: longer lines wrap
+
+    def __init__(self, tree: ttk.Treeview, text: Callable[[str], str]) -> None:
+        self._tree, self._text = tree, text
+        self._row = ""  # the row under the mouse
+        self._pending: str | None = None  # the after() job that will show the window
+        self._window: tk.Toplevel | None = None
+        tree.bind("<Motion>", self._moved, add="+")
+        for sequence in ("<Leave>", "<ButtonPress>", "<KeyPress>", "<MouseWheel>"):
+            tree.bind(sequence, lambda _event: self.hide(), add="+")
+
+    def _moved(self, event: tk.Event) -> None:
+        row = self._tree.identify_row(event.y)
+        if row == self._row:
+            return
+        self.hide()
+        self._row = row
+        if row:
+            self._pending = self._tree.after(self.DELAY_MS, self._show)
+
+    def _show(self) -> None:
+        self._pending = None
+        if not self._tree.exists(self._row):
+            return
+        text = self._text(self._row).strip()
+        if not text:
+            return
+        self._window = window = tk.Toplevel(self._tree)
+        window.wm_overrideredirect(True)
+        tk.Label(
+            window, text=text, justify="left", wraplength=self.WIDTH, background="#FFFFE0",
+            foreground="black", relief="solid", borderwidth=1, padx=6, pady=4,
+        ).pack()
+        x, y = self._tree.winfo_pointerxy()
+        window.update_idletasks()
+        # Below and right of the mouse, but kept on the screen.
+        x = min(x + 12, window.winfo_screenwidth() - window.winfo_reqwidth())
+        if y + 20 + window.winfo_reqheight() > window.winfo_screenheight():
+            y -= window.winfo_reqheight() + 8
+        else:
+            y += 20
+        window.wm_geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+    def hide(self) -> None:
+        """Remove the window, or stop it from coming; the next row starts afresh."""
+        if self._pending is not None:
+            self._tree.after_cancel(self._pending)
+            self._pending = None
+        if self._window is not None:
+            self._window.destroy()
+            self._window = None
+        self._row = ""
 
 
 class WrapFrame(ttk.Frame):
@@ -844,6 +915,317 @@ class TagsDialog(tk.Toplevel):
         self.reload()
 
 
+class LocalTemplates:
+    """The subtask templates of the local database (as plain data, like the server's)."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def list(self) -> list[dict[str, Any]]:
+        return [templates.template_data(t) for t in templates.list_templates(self.session)]
+
+    def add(self, fields: dict[str, Any]) -> dict[str, Any]:
+        return templates.template_data(templates.add_template(self.session, fields))
+
+    def update(self, template_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        return templates.template_data(templates.update_template(self.session, template_id, fields))
+
+    def delete(self, template_id: int) -> None:
+        templates.delete_template(self.session, template_id)
+
+
+class RemoteTemplates:
+    """The subtask templates on the application server."""
+
+    def __init__(self, api: Any) -> None:
+        self.api = api
+
+    def list(self) -> list[dict[str, Any]]:
+        return self.api.request("GET", "/subtask-templates")
+
+    def add(self, fields: dict[str, Any]) -> dict[str, Any]:
+        return self.api.request("POST", "/subtask-templates", fields)
+
+    def update(self, template_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        return self.api.request("PATCH", f"/subtask-templates/{template_id}", fields)
+
+    def delete(self, template_id: int) -> None:
+        self.api.request("DELETE", f"/subtask-templates/{template_id}")
+
+
+class SubtaskTemplatesDialog(tk.Toplevel):
+    """Modal window with the editable list of subtask templates.
+
+    With a parent task's name it also adds subtasks: `chosen` then holds the
+    templates selected when "Add as subtasks" was pressed (several with Ctrl or
+    Shift), or a double-clicked one.
+    """
+
+    def __init__(
+        self, master: tk.Misc, store: LocalTemplates | RemoteTemplates,
+        parent_name: str | None = None,
+    ) -> None:
+        super().__init__(master)
+        self.title(tr("Subtask templates"))
+        self.store = store
+        self.chosen: list[dict[str, Any]] = []
+        self._items: dict[str, dict[str, Any]] = {}
+        self.transient(master)  # type: ignore[arg-type]
+
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill="both", expand=True)
+        if parent_name is not None:
+            ttk.Label(
+                body, text=tr('Add subtasks to "{name}" (Ctrl+click chooses several):').format(
+                    name=parent_name), wraplength=560, justify="left",
+            ).pack(anchor="w", pady=(0, 6))
+
+        panes = ttk.Frame(body)
+        panes.pack(fill="both", expand=True)
+        columns = ("Template", "Priority", "Urgency")
+        self.list = ttk.Treeview(
+            panes, columns=columns, show="headings", height=12,
+            selectmode="extended" if parent_name is not None else "browse",
+        )
+        for column, width in zip(columns, (220, 90, 90)):
+            self.list.heading(column, text=tr(column))
+            self.list.column(column, width=width, stretch=column == "Template")
+        self.list.pack(side="left", fill="both", expand=True)
+        self.list.bind("<<TreeviewSelect>>", lambda _event: self._show_selected())
+        if parent_name is not None:
+            self.list.bind("<Double-1>", lambda _event: self.add_subtasks())
+
+        form = ttk.Frame(panes, padding=(12, 0, 0, 0))
+        form.pack(side="left", fill="y")
+        ttk.Label(form, text=tr("Name")).grid(row=0, column=0, sticky="w")
+        self._name = ttk.Entry(form, width=32)
+        self._name.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        ttk.Label(form, text=tr("Description")).grid(row=2, column=0, sticky="w")
+        self._description = tk.Text(form, width=32, height=5, wrap="word")
+        self._description.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        ttk.Label(form, text=tr("Priority")).grid(row=4, column=0, sticky="w")
+        ttk.Label(form, text=tr("Urgency")).grid(row=4, column=1, sticky="w", padx=(6, 0))
+        self._priority = Choice(form, [(tr(p.name), p.name) for p in Priority], "Normal")
+        self._priority.configure(width=12)
+        self._priority.grid(row=5, column=0, sticky="w")
+        self._urgency = Choice(form, [(tr(u.name), u.name) for u in Urgency], "Medium")
+        self._urgency.configure(width=12)
+        self._urgency.grid(row=5, column=1, sticky="w", padx=(6, 0))
+        edit = ttk.Frame(form)
+        edit.grid(row=6, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        for label, command in (
+            (tr("Add"), self.add_template),
+            (tr("Save"), self.save_template),
+            (tr("Delete"), self.delete_template),
+            (tr("Clear"), self.clear_form),
+        ):
+            ttk.Button(edit, text=label, command=command).pack(side="left", padx=(0, 4))
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(10, 0))
+        if parent_name is not None:
+            ttk.Button(buttons, text=tr("Cancel"), command=self.destroy).pack(side="right")
+            ttk.Button(
+                buttons, text=tr("Add as subtasks"), command=self.add_subtasks, default="active"
+            ).pack(side="right", padx=(0, 4))
+        else:
+            ttk.Button(buttons, text=tr("Close"), command=self.destroy).pack(side="right")
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        if self.reload() is None:
+            self.after_idle(self.destroy)  # the list could not be loaded (already said why)
+            return
+        self.wait_visibility()
+        self.grab_set()
+        self.list.focus_set()
+
+    def _change(self, action: Callable[[], Any]) -> Any:
+        """Run a change; show why and return None if it is refused or fails."""
+        try:
+            return action()
+        except ValueError as error:  # ManagementError, or RemoteError from the server
+            messagebox.showwarning(tr("Subtask templates"), str(error), parent=self)
+            return None
+
+    def reload(self, select_id: int | None = None) -> list[dict[str, Any]] | None:
+        """Fill the list again; None if the templates could not be loaded."""
+        items = self._change(self.store.list)
+        if items is None:
+            return None
+        self.list.delete(*self.list.get_children())
+        self._items = {str(item["id"]): item for item in items}
+        for iid, item in self._items.items():
+            self.list.insert("", "end", iid=iid, values=(
+                item["name"], tr(item["priority"]), tr(item["urgency"])
+            ))
+        if select_id is not None and self.list.exists(str(select_id)):
+            self.list.selection_set(str(select_id))
+            self.list.see(str(select_id))
+        return items
+
+    def _selected(self) -> list[dict[str, Any]]:
+        return [self._items[iid] for iid in self.list.selection() if iid in self._items]
+
+    def _show_selected(self) -> None:
+        """Put the selected template in the form (the first, if several)."""
+        selected = self._selected()
+        if not selected:
+            return
+        item = selected[0]
+        self._name.delete(0, "end")
+        self._name.insert(0, item["name"])
+        self._description.delete("1.0", "end")
+        self._description.insert("1.0", item["description"] or "")
+        self._priority.set_options(self._priority._choices, item["priority"])
+        self._urgency.set_options(self._urgency._choices, item["urgency"])
+
+    def _form(self) -> dict[str, Any]:
+        return {
+            "name": self._name.get().strip(),
+            "description": self._description.get("1.0", "end").strip() or None,
+            "priority": self._priority.value(),
+            "urgency": self._urgency.value(),
+        }
+
+    def clear_form(self) -> None:
+        """Empty the form for a new template."""
+        self.list.selection_set(())
+        self._name.delete(0, "end")
+        self._description.delete("1.0", "end")
+        self._priority.set_options(self._priority._choices, "Normal")
+        self._urgency.set_options(self._urgency._choices, "Medium")
+        self._name.focus_set()
+
+    def add_template(self) -> None:
+        """A new template from the form."""
+        added = self._change(lambda: self.store.add(self._form()))
+        if added is not None:
+            self.reload(added["id"])
+
+    def save_template(self) -> None:
+        """Save the form into the selected template."""
+        selected = self._selected()
+        if len(selected) != 1:
+            messagebox.showinfo(
+                tr("Subtask templates"), tr("Select one template to change."), parent=self
+            )
+            return
+        template_id = selected[0]["id"]
+        if self._change(lambda: self.store.update(template_id, self._form())) is not None:
+            self.reload(template_id)
+
+    def delete_template(self) -> None:
+        """Delete the selected templates (subtasks made from them stay)."""
+        selected = self._selected()
+        if not selected:
+            messagebox.showinfo(tr("Subtask templates"), tr("Select a template first."), parent=self)
+            return
+        names = ", ".join(f'"{item["name"]}"' for item in selected)
+        question = tr("Delete template(s) {names}?").format(names=names)
+        if not messagebox.askyesno(tr("Delete"), question, parent=self):
+            return
+        for item in selected:
+            if self._change(lambda item=item: self.store.delete(item["id"])) is None:
+                break
+        self.reload()
+
+    def add_subtasks(self) -> None:
+        """Close the window with the selected templates as the subtasks to add."""
+        self.chosen = self._selected()
+        if not self.chosen:
+            messagebox.showinfo(tr("Subtask templates"), tr("Select a template first."), parent=self)
+            return
+        self.destroy()
+
+
+class RandomTaskWindow(tk.Toplevel):
+    """A task drawn at random (see todo_db.pick), with buttons to draw another or find it."""
+
+    def __init__(self, master: TodoApp) -> None:
+        super().__init__(master)
+        self.app = master
+        self.title(tr("Random task"))
+        self.transient(master)
+        self.resizable(False, False)
+        self.task: Task | None = None
+
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        heading = tkfont.nametofont("TkDefaultFont").copy()
+        heading.configure(size=heading.cget("size") + 4, weight="bold")
+        self._font = heading  # keep a reference, or Tk drops the font
+        self._name = ttk.Label(body, font=heading, wraplength=420, justify="left")
+        self._name.pack(anchor="w")
+        self._parent = ttk.Label(body, foreground="gray40", wraplength=420, justify="left")
+        self._parent.pack(anchor="w")
+        levels = ttk.Frame(body)
+        levels.pack(anchor="w", pady=(8, 0))
+        self._priority = tk.Label(levels, padx=6, pady=2, foreground="black")
+        self._priority.pack(side="left")
+        self._urgency = tk.Label(levels, padx=6, pady=2, foreground="black")
+        self._urgency.pack(side="left", padx=(6, 0))
+        self._details = ttk.Label(body, wraplength=420, justify="left")
+        self._details.pack(anchor="w", pady=(8, 0))
+        self._description = ttk.Label(body, wraplength=420, justify="left")
+
+        self._buttons = buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(14, 0))
+        ttk.Button(buttons, text=tr("Close"), command=self.destroy).pack(side="right")
+        ttk.Button(buttons, text=tr("Show in list"), command=self.show_in_list).pack(
+            side="right", padx=(0, 4)
+        )
+        ttk.Button(buttons, text=tr("Another"), command=self.draw, default="active").pack(
+            side="right", padx=(0, 4)
+        )
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Return>", lambda _event: self.draw())
+        self.draw()
+
+    def draw(self) -> None:
+        """Draw a task (another one than shown, if there is another)."""
+        candidates = self.app.random_candidates()
+        if self.task is not None and len(candidates) > 1:
+            candidates = [task for task in candidates if task.id != self.task.id]
+        self.task = task = pick.pick_task(
+            candidates, lambda t: (t.priority.name, t.urgency.name)
+        )
+        if task is None:
+            self.destroy()
+            return
+        self._name.configure(text=task.name)
+        path = []
+        parent = task.parent
+        while parent is not None:
+            path.insert(0, parent.name)
+            parent = parent.parent
+        self._parent.configure(text=" › ".join(path))
+        for widget, caption, level in (
+            (self._priority, "Priority", task.priority), (self._urgency, "Urgency", task.urgency)
+        ):
+            widget.configure(text=f"{tr(caption)}: {tr(level.name)}",
+                             background=LEVEL_COLOURS[int(level)])
+        details = [f"{tr('Stage')}: {task.stage.name}"]
+        if task.due_date is not None:
+            details.append(f"{tr('Due date')}: {task.due_date.isoformat()}")
+        if task.assignee is not None:
+            details.append(f"{tr('Assignee')}: {task.assignee.name}")
+        if task.location:
+            details.append(f"{tr('Location')}: {task.location}")
+        self._details.configure(text=" · ".join(details))
+        self._description.configure(text=task.description or "")
+        if task.description:  # shown only when there is one
+            self._description.pack(anchor="w", pady=(6, 0), before=self._buttons)
+        else:
+            self._description.pack_forget()
+
+    def show_in_list(self) -> None:
+        """Select the task in the list (clearing the filters if they hide it) and close."""
+        task_id = self.task.id if self.task else None
+        self.destroy()
+        if task_id is not None:
+            self.app.show_task(task_id)
+
+
 class ReminderWindow(tk.Toplevel):
     """The reminder: every due task on an orange background, until the user closes it."""
 
@@ -1269,14 +1651,136 @@ class Filter:
         return self.test(task)
 
 
-def pick_filter(choice: Choice, key: str | None) -> bool:
-    """Select the choice whose Filter has this key (None = All); False if there is none."""
-    for index, (_label, value) in enumerate(choice._choices):
-        if (value.key if value else None) == key:
-            choice.current(index)
-            return True
-    choice.current(0)
-    return False
+class MultiChoice(ttk.Combobox):
+    """A column filter where several choices can be ticked; a task passes if it matches any.
+
+    Looks like the other drop-downs; clicking it opens a list in which each click
+    ticks or unticks a choice (the list stays open; Escape, Enter or a click
+    elsewhere closes it). "All" unticks everything. on_change is called after
+    every change made in the list.
+    """
+
+    MAX_ROWS = 15  # a longer list scrolls
+
+    def __init__(
+        self, master: tk.Misc, options: list[tuple[str, Filter | None]],
+        on_change: Callable[[], None] | None = None,
+    ) -> None:
+        super().__init__(master, state="readonly")
+        self._on_change = on_change
+        self._filters: list[tuple[str, Filter]] = []
+        self._chosen: list[str] = []  # the keys ticked
+        self._popup: tk.Toplevel | None = None
+        self.set_options(options)
+        for sequence in ("<Button-1>", "<Down>", "<space>"):
+            self.bind(sequence, self._open)
+        self.bind("<MouseWheel>", lambda _event: "break")  # would step through the values
+        self.bind("<Button-4>", lambda _event: "break")
+        self.bind("<Button-5>", lambda _event: "break")
+
+    def set_options(self, options: list[tuple[str, Filter | None]]) -> None:
+        """Replace the choices ("All" = None is left out), keeping the ticks still possible."""
+        self._filters = [(label, value) for label, value in options if value is not None]
+        known = {value.key for _label, value in self._filters}
+        self._chosen = [key for key in self._chosen if key in known]
+        self._show()
+
+    def chosen_keys(self) -> list[str]:
+        """The keys ticked, in the order of the list."""
+        return [value.key for _label, value in self._filters if value.key in self._chosen]
+
+    def set_keys(self, keys: list[str]) -> bool:
+        """Tick these keys (none = All); False if some of them are not choices (left out)."""
+        known = {value.key for _label, value in self._filters}
+        self._chosen = [key for key in keys if key in known]
+        self._show()
+        return len(self._chosen) == len(set(keys))
+
+    def test(self) -> Predicate | None:
+        """Whether a task passes: it matches one of the ticked choices (None = all pass)."""
+        tests = [value for _label, value in self._filters if value.key in self._chosen]
+        if not tests:
+            return None
+        return lambda task: any(test(task) for test in tests)
+
+    def _show(self) -> None:
+        labels = [label for label, value in self._filters if value.key in self._chosen]
+        self.set(", ".join(labels) if labels else tr("All"))
+
+    def _open(self, _event: tk.Event | None = None) -> str:
+        if self._popup is not None:
+            self._close()
+            return "break"
+        self._popup = popup = tk.Toplevel(self)
+        popup.wm_overrideredirect(True)
+        frame = tk.Frame(popup, borderwidth=1, relief="solid", background="white")
+        frame.pack(fill="both", expand=True)
+        ttk.Button(frame, text=tr("All"), command=self._clear).pack(fill="x")
+        rows = ttk.Frame(frame)
+        rows.pack(fill="both", expand=True)
+        labels = [label for label, _value in self._filters]
+        self._listbox = listbox = tk.Listbox(
+            rows, selectmode="multiple", exportselection=False, activestyle="none",
+            height=max(1, min(len(labels), self.MAX_ROWS)), borderwidth=0,
+            selectbackground="#3B73B9", selectforeground="white",  # ticked: clearly marked
+            width=max([len(label) for label in labels] + [10]) + 2,
+        )
+        listbox.pack(side="left", fill="both", expand=True)
+        if len(labels) > self.MAX_ROWS:
+            bar = ttk.Scrollbar(rows, orient="vertical", command=listbox.yview)
+            bar.pack(side="right", fill="y")
+            listbox.configure(yscrollcommand=bar.set)
+        for index, (label, value) in enumerate(self._filters):
+            listbox.insert("end", label)
+            if value.key in self._chosen:
+                listbox.selection_set(index)
+        listbox.bind("<<ListboxSelect>>", lambda _event: self._ticked())
+        for sequence in ("<Escape>", "<Return>"):
+            popup.bind(sequence, lambda _event: self._close())
+        popup.bind("<ButtonPress>", self._clicked)
+
+        popup.update_idletasks()
+        width = max(self.winfo_width(), popup.winfo_reqwidth())
+        height = popup.winfo_reqheight()
+        x = min(self.winfo_rootx(), self.winfo_screenwidth() - width)
+        y = self.winfo_rooty() + self.winfo_height()
+        if y + height > self.winfo_screenheight():
+            y = self.winfo_rooty() - height  # no room below: above the filter
+        popup.wm_geometry(f"{width}x{height}+{max(x, 0)}+{max(y, 0)}")
+        popup.grab_set()  # clicks elsewhere come here, and close the list
+        listbox.focus_set()
+        return "break"
+
+    def _clicked(self, event: tk.Event) -> None:
+        popup = self._popup
+        if popup is None:
+            return
+        inside = (popup.winfo_rootx() <= event.x_root < popup.winfo_rootx() + popup.winfo_width()
+                  and popup.winfo_rooty() <= event.y_root < popup.winfo_rooty()
+                  + popup.winfo_height())
+        if not inside:
+            self._close()
+
+    def _ticked(self) -> None:
+        self._chosen = [self._filters[index][1].key for index in self._listbox.curselection()]
+        self._changed()
+
+    def _clear(self) -> None:
+        self._listbox.selection_clear(0, "end")
+        self._chosen = []
+        self._changed()
+
+    def _changed(self) -> None:
+        self._show()
+        if self._on_change is not None:
+            self._on_change()
+
+    def _close(self) -> None:
+        if self._popup is not None:
+            self._popup.grab_release()
+            self._popup.destroy()
+            self._popup = None
+            self.focus_set()
 
 
 class PresetForm(tk.Toplevel):
@@ -1303,10 +1807,10 @@ class PresetForm(tk.Toplevel):
         rows: list[tuple[str, tk.Widget]] = [
             (tr("Preset name"), self._name), (tr("Task name contains"), self._text)
         ]
-        self._choices: dict[str, Choice] = {}
+        self._choices: dict[str, MultiChoice] = {}
         for column in TASK_COLUMNS:
-            choice = Choice(form, master._filter_options(column), None)
-            pick_filter(choice, preset.filters.get(column))
+            choice = MultiChoice(form, master._filter_options(column))
+            choice.set_keys(filter_keys(preset.filters.get(column)))
             self._choices[column] = choice
             rows.append((tr(column), choice))
         for row, (label, widget) in enumerate(rows):
@@ -1335,9 +1839,9 @@ class PresetForm(tk.Toplevel):
             )
             return
         filters = {
-            column: value.key
+            column: value
             for column, choice in self._choices.items()
-            if (value := choice.value()) is not None
+            if (value := filter_value(choice.chosen_keys())) is not None
         }
         self.result = FilterPreset(name, self._text.get().strip(), filters)
         self.destroy()
@@ -1684,6 +2188,7 @@ class TodoApp(tk.Tk):
         actions: list[tuple[str, Callable[[], None]]] = [
             (tr("New task"), self.new_task),
             (tr("New subtask"), self.new_subtask),
+            (tr("From template…"), self.subtasks_from_template),
             (tr("Edit"), self.edit_task),
             (tr("Next stage"), self.next_stage),
             (tr("Complete"), self.complete),
@@ -1692,6 +2197,7 @@ class TodoApp(tk.Tk):
             (tr("Indent"), self.indent),
             (tr("Outdent"), self.outdent),
             (tr("Sort…"), self.open_sort),
+            (tr("Random task"), self.random_task),
             (tr("Delete"), self.delete),
         ]
         # "Next stage" is the everyday action, so it stands out in green.
@@ -1731,6 +2237,7 @@ class TodoApp(tk.Tk):
             manage.add_command(label=tr("Users…"), command=self.manage_users)
             manage.add_command(label=tr("Workflows…"), command=self.manage_workflows)
             manage.add_command(label=tr("Tags…"), command=self.manage_tags)
+        manage.add_command(label=tr("Subtask templates…"), command=self.manage_templates)
         menubar.add_cascade(label=tr("Manage"), menu=manage)
         self._presets_menu = tk.Menu(menubar, tearoff=False)
         menubar.add_cascade(label=tr("Filters"), menu=self._presets_menu)
@@ -1778,7 +2285,7 @@ class TodoApp(tk.Tk):
         panes.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
         self.tree = self._make_tree(
-            panes, TASK_COLUMNS, on_scroll=self._place_filters, show="tree headings", height=14
+            panes, TASK_COLUMNS, on_scroll=self._tree_moved, show="tree headings", height=14
         )
         self._build_filters()
         self.tree.heading("#0", text=tr("Task"))
@@ -1788,18 +2295,27 @@ class TodoApp(tk.Tk):
             self.tree.column(column, width=width, stretch=False)
         self.tree.tag_configure("done", foreground="gray55")
         self.tree.tag_configure("overdue", foreground="red3")
+        self.tree.tag_configure("today", foreground=DUE_TODAY_COLOUR)
         italic = tkfont.nametofont("TkDefaultFont").copy()
         italic.configure(slant="italic")
         self.tree.tag_configure("context", foreground="gray60", font=italic)
         self._italic = italic  # keep a reference, or Tk drops the font
+        # The coloured Priority and Urgency cells: labels laid over the list, because
+        # a Treeview can colour only whole rows. Rows of done tasks have none.
+        self._levels: dict[str, tuple[Priority, Urgency]] = {}  # row -> its task's levels
+        self._level_cells: list[tk.Label] = []
+        self._level_cells_pending = False
         self.tree.bind("<<TreeviewOpen>>", lambda _event: self._remember_open(True))
         self.tree.bind("<<TreeviewClose>>", lambda _event: self._remember_open(False))
         for sequence in ("<Configure>", "<B1-Motion>", "<ButtonRelease-1>"):
-            self.tree.bind(sequence, lambda _event: self.after_idle(self._place_filters), add="+")
+            self.tree.bind(sequence, lambda _event: self.after_idle(self._tree_moved), add="+")
+        for sequence in ("<<TreeviewOpen>>", "<<TreeviewClose>>"):
+            self.tree.bind(sequence, lambda _event: self.after_idle(self._tree_moved), add="+")
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.show_history())
         self.tree.bind("<Double-1>", lambda _event: self.edit_task())
         self.tree.bind("<Return>", lambda _event: self.edit_task())
         self.tree.bind("<Delete>", lambda _event: self.delete())
+        self._tooltip = TreeTooltip(self.tree, self._task_description)
 
         details = ttk.Frame(panes)
         self._description = ttk.Label(details, text="", justify="left")
@@ -1825,7 +2341,7 @@ class TodoApp(tk.Tk):
         """Create a Treeview with vertical and horizontal scrollbars in its own frame.
 
         Row 0 of the frame is left free for a widget above the tree (the filters);
-        on_scroll is called after every horizontal scroll.
+        on_scroll is called after every scroll, sideways or up and down.
         """
         frame = ttk.Frame(panes)
         frame.columnconfigure(0, weight=1)
@@ -1841,7 +2357,12 @@ class TodoApp(tk.Tk):
             if on_scroll is not None:
                 on_scroll()
 
-        tree.configure(yscrollcommand=vertical.set, xscrollcommand=xscroll)
+        def yscroll(first: str, last: str) -> None:
+            vertical.set(first, last)
+            if on_scroll is not None:
+                on_scroll()
+
+        tree.configure(yscrollcommand=yscroll, xscrollcommand=xscroll)
         tree.grid(row=1, column=0, sticky="nsew")
         vertical.grid(row=1, column=1, sticky="ns")
         horizontal.grid(row=2, column=0, sticky="ew")
@@ -1918,6 +2439,15 @@ class TodoApp(tk.Tk):
         self.wait_window(TagsDialog(self, self.session))
         self.refresh()
 
+    def _templates(self) -> LocalTemplates | RemoteTemplates:
+        if self._account:
+            return RemoteTemplates(self._account.api)
+        return LocalTemplates(self.session)
+
+    def manage_templates(self) -> None:
+        """Open the subtask templates window, only to change the list."""
+        self.wait_window(SubtaskTemplatesDialog(self, self._templates()))
+
     # -- filters ------------------------------------------------------------
 
     def _build_filters(self) -> None:
@@ -1936,10 +2466,9 @@ class TodoApp(tk.Tk):
             side="left", padx=(2, 0)
         )
         self._filter_widgets: dict[str, tk.Widget] = {"#0": name_box}
-        self._column_filters: dict[str, Choice] = {}
+        self._column_filters: dict[str, MultiChoice] = {}
         for column in TASK_COLUMNS:
-            choice = Choice(self._filter_bar, [(tr("All"), None)], None)
-            choice.bind("<<ComboboxSelected>>", lambda _event: self.refresh())
+            choice = MultiChoice(self._filter_bar, [], self.refresh)
             self._column_filters[column] = choice
             self._filter_widgets[column] = choice
 
@@ -2010,21 +2539,18 @@ class TodoApp(tk.Tk):
     def _update_filter_options(self) -> None:
         """Refresh the filter choices (users, tags... may have changed), keeping each pick."""
         for column, choice in self._column_filters.items():
-            picked = choice.value()
-            choice.set_options(self._filter_options(column), None)
-            if picked is not None:
-                self._pick_filter(column, picked.key)
+            choice.set_options(self._filter_options(column))
 
-    def _pick_filter(self, column: str, key: str | None) -> bool:
-        """Select a column filter by its key (None = All); False if that choice no longer exists."""
-        return pick_filter(self._column_filters[column], key)
+    def _pick_filter(self, column: str, keys: str | list[str] | None) -> bool:
+        """Set a column filter to these keys (None = All); False if some no longer exist."""
+        return self._column_filters[column].set_keys(filter_keys(keys))
 
     def _current_filters(self) -> FilterPreset:
         """The filters now set, as an (unnamed) preset."""
         picked = {
-            column: value.key
+            column: value
             for column, choice in self._column_filters.items()
-            if (value := choice.value()) is not None
+            if (value := filter_value(choice.chosen_keys())) is not None
         }
         return FilterPreset("", self._name_filter.get().strip(), picked)
 
@@ -2171,7 +2697,7 @@ class TodoApp(tk.Tk):
     def clear_filters(self) -> None:
         """Reset every filter to show all tasks."""
         for choice in self._column_filters.values():
-            choice.current(0)
+            choice.set_keys([])
         self._name_filter.set("")  # triggers refresh
 
     def _remember_open(self, is_open: bool) -> None:
@@ -2234,10 +2760,12 @@ class TodoApp(tk.Tk):
 
     def refresh(self) -> None:
         """Reload the task tree with the filters applied, keeping the selection."""
+        self._tooltip.hide()  # its row may be gone
+        self._levels.clear()
         selected = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         self._update_filter_options()
-        tests = [test for choice in self._column_filters.values() if (test := choice.value())]
+        tests = [test for choice in self._column_filters.values() if (test := choice.test())]
         filtering = bool(tests or self._name_filter.get().strip())
         self._progress = {
             task.id: self.service.get_progress_percent(task.id)
@@ -2250,6 +2778,7 @@ class TodoApp(tk.Tk):
         if selected and self.tree.exists(selected[0]):
             self.tree.selection_set(selected[0])
             self.tree.see(selected[0])
+        self._tree_moved()
         self.show_history()
 
     def _insert(self, task: Task, parent_iid: str, tests: list[Predicate], filtering: bool) -> bool:
@@ -2265,10 +2794,14 @@ class TodoApp(tk.Tk):
             if task.next_reset_at is not None:
                 repeat += f" ⟳ {task.next_reset_at.astimezone():%Y-%m-%d}"
         iid = str(task.id)
+        if not task.stage.is_final:
+            self._levels[iid] = (task.priority, task.urgency)
         if task.stage.is_final:
             row_tags: tuple[str, ...] = ("done",)
         elif task.due_date is not None and task.due_date < date.today():
             row_tags = ("overdue",)
+        elif task.due_date == date.today():
+            row_tags = ("today",)
         else:
             row_tags = ()
         self.tree.insert(
@@ -2301,6 +2834,72 @@ class TodoApp(tk.Tk):
             return True
         self.tree.delete(iid)
         return False
+
+    def _tree_moved(self) -> None:
+        """The list scrolled, resized or changed: line up the filters and the coloured cells."""
+        self._place_filters()
+        if not self._level_cells_pending:
+            self._level_cells_pending = True
+            self.after_idle(self._place_level_cells)
+
+    def _place_level_cells(self) -> None:
+        """Lay a coloured label over the Priority and Urgency cell of every visible row."""
+        self._level_cells_pending = False
+        cells = [
+            (iid, column, level)
+            for iid, levels in self._levels.items()
+            if self.tree.exists(iid)
+            for column, level in zip(LEVEL_COLUMNS, levels)
+        ]
+        used = 0
+        for iid, column, level in cells:
+            box = self.tree.bbox(iid, column)
+            if not box:
+                continue  # scrolled out of view, or inside a closed task
+            if used == len(self._level_cells):
+                self._level_cells.append(self._make_level_cell())
+            cell = self._level_cells[used]
+            used += 1
+            x, y, width, height = box
+            cell.configure(text=tr(level.name), background=LEVEL_COLOURS[int(level)])
+            cell.iid = iid  # type: ignore[attr-defined]
+            cell.place(x=x + 1, y=y + 1, width=max(width - 2, 1), height=max(height - 2, 1))
+        for cell in self._level_cells[used:]:
+            cell.place_forget()
+
+    def _make_level_cell(self) -> tk.Label:
+        """A label for one coloured cell; clicks, scrolling and hovering act on its row."""
+        cell = tk.Label(self.tree, anchor="w", padx=3, foreground="black", borderwidth=0)
+        cell.iid = ""  # type: ignore[attr-defined]
+
+        def choose(_event: tk.Event) -> None:
+            self._tooltip.hide()
+            self.tree.focus_set()
+            self.tree.focus(cell.iid)  # type: ignore[attr-defined]
+            self.tree.selection_set(cell.iid)  # type: ignore[attr-defined]
+
+        def scroll(units: int) -> None:
+            self._tooltip.hide()
+            self.tree.yview_scroll(units, "units")
+
+        def hover(event: tk.Event) -> None:  # the tooltip of the row, as over the list
+            self.tree.event_generate(
+                "<Motion>", x=cell.winfo_x() + event.x, y=cell.winfo_y() + event.y
+            )
+
+        cell.bind("<Button-1>", choose)
+        cell.bind("<Double-1>", lambda _event: self.edit_task())
+        cell.bind("<Button-4>", lambda _event: scroll(-3))
+        cell.bind("<Button-5>", lambda _event: scroll(3))
+        cell.bind("<MouseWheel>", lambda event: scroll(-3 if event.delta > 0 else 3))
+        cell.bind("<Motion>", hover)
+        cell.bind("<Leave>", lambda _event: self._tooltip.hide())
+        return cell
+
+    def _task_description(self, iid: str) -> str:
+        """The description of the task in a row of the list ("" if none)."""
+        task = self.session.get(Task, int(iid))
+        return (task.description or "") if task else ""
 
     def show_history(self) -> None:
         """Show the description and history of the selected task."""
@@ -2534,6 +3133,67 @@ class TodoApp(tk.Tk):
         task = self._selected()
         if task is not None:
             self._create(task.id)
+
+    def subtasks_from_template(self) -> None:
+        """Add subtasks to the selected task from templates chosen in the templates window."""
+        task = self._selected()
+        if task is None:
+            return
+        dialog = SubtaskTemplatesDialog(self, self._templates(), parent_name=task.name)
+        self.wait_window(dialog)
+        if not dialog.chosen:
+            return
+        parent = {
+            "id": task.id,
+            "first_stage_id": task.stage.workflow.stages[0].id,
+            "assignee_id": task.assignee_id,
+        }
+        chosen, parent_id, user_id = dialog.chosen, task.id, self._acting_user_id()
+
+        def create() -> None:
+            created = None
+            for template in chosen:
+                fields = templates.subtask_fields(template, parent)
+                fields["priority"] = Priority[fields["priority"]]
+                fields["urgency"] = Urgency[fields["urgency"]]
+                created = self.service.create_task(
+                    fields.pop("name"), fields.pop("stage_id"), user_id, **fields
+                )
+            self._collapsed.discard(str(parent_id))  # show the new subtasks
+            self.refresh()
+            if created is not None:
+                self.tree.selection_set(str(created.id))
+                self.tree.see(str(created.id))
+
+        self._run(create)
+
+    def random_candidates(self) -> list[Task]:
+        """The tasks a random draw picks from: unfinished and without subtasks."""
+        return [
+            task for task in self.session.scalars(select(Task).order_by(Task.id))
+            if not task.stage.is_final and not task.subtasks
+        ]
+
+    def random_task(self) -> None:
+        """Show a task drawn at random, favouring the important and urgent ones."""
+        if not self.random_candidates():
+            messagebox.showinfo(
+                tr("Random task"), tr("There are no unfinished tasks without subtasks."),
+                parent=self,
+            )
+            return
+        RandomTaskWindow(self)
+
+    def show_task(self, task_id: int) -> None:
+        """Select a task in the list and scroll to it; clear the filters if they hide it."""
+        iid = str(task_id)
+        if not self.tree.exists(iid):
+            self.clear_filters()
+        if self.tree.exists(iid):
+            self.tree.selection_set(iid)
+            self.tree.focus(iid)
+            self.tree.see(iid)  # also opens its parents
+            self.tree.focus_set()
 
     def edit_task(self) -> None:
         """Edit the selected task; only the changed fields are logged."""

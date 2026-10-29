@@ -23,7 +23,7 @@ in
 assert lib.assertOneOf "component" component [ "client" "server" ];
 py.buildPythonApplication {
   pname = if client then "todolist" else "todolist-server";
-  version = "1.0";
+  version = "1.2";
   pyproject = true;
 
   # Only the code: never the databases, settings or logins in the project folder.

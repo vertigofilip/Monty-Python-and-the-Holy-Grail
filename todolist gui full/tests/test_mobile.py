@@ -83,7 +83,7 @@ def test_tasks_tree_changes_and_history(server: str) -> None:  # noqa: F811
     assert len(task_rows(data["tasks"], show=SHOW_ALL)) == 2
     done = next(t for t in data["tasks"] if t["id"] == child["id"])
     assert next_stage_id(done, data["workflows"]) is None
-    assert task_details(done).startswith("Done · Important")
+    assert task_details(done).startswith("Done · Priority: Important")
 
     history = api.request("GET", f"/tasks/{child['id']}/history")
     lines = history_lines(history)

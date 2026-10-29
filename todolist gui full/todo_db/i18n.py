@@ -311,6 +311,29 @@ _POLISH: dict[str, str] = {
     "A tag with this name already exists.": "Etykieta o tej nazwie już istnieje.",
     'Delete tag "{name}"?': "Usunąć etykietę „{name}”?",
     "Could not delete the tag.": "Nie udało się usunąć etykiety.",
+    # Subtask templates
+    "Subtask templates": "Szablony podzadań",
+    "Subtask templates…": "Szablony podzadań…",
+    "From template…": "Z szablonu…",
+    "Template": "Szablon",
+    "Add as subtasks": "Dodaj jako podzadania",
+    'Add subtasks to "{name}" (Ctrl+click chooses several):':
+        "Dodaj podzadania do „{name}” (Ctrl+kliknięcie wybiera kilka):",
+    "Select a template first.": "Najpierw wybierz szablon.",
+    "Select one template to change.": "Wybierz jeden szablon do zmiany.",
+    "Delete template(s) {names}?": "Usunąć szablon(y) {names}?",
+    "A template with this name already exists.": "Szablon o tej nazwie już istnieje.",
+    "Could not delete the template.": "Nie udało się usunąć szablonu.",
+    'Add subtasks to "{name}":': "Dodaj podzadania do „{name}”:",
+    "New template": "Nowy szablon",
+    "No templates yet.": "Nie ma jeszcze szablonów.",
+    # A random task
+    "Random task": "Losowe zadanie",
+    "Another": "Inne",
+    "Show in list": "Pokaż na liście",
+    "Open": "Otwórz",
+    "There are no unfinished tasks without subtasks.":
+        "Nie ma niezakończonych zadań bez podzadań.",
 }
 
 _TRANSLATIONS: dict[str, dict[str, str]] = {"pl": _POLISH}

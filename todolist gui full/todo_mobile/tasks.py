@@ -7,7 +7,7 @@ from datetime import date, datetime
 from typing import Any
 
 from todo_db.i18n import tr, tr_n
-from todo_db.presets import TASK_COLUMNS, sorted_by, text_sort_key
+from todo_db.presets import TASK_COLUMNS, filter_keys, sorted_by, text_sort_key
 
 NONE = "(none)"  # how the server's history writes an empty value
 PRIORITIES = ("Maybe", "Normal", "Important")
@@ -50,7 +50,8 @@ def task_rows(
 ) -> list[Row]:
     """The task tree flattened into rows, filtered and sorted.
 
-    filters: column -> filter key, as in the desktop program's column filters
+    filters: column -> filter key, or a list of keys (any of them passes), as in
+    the desktop program's column filters
     (a "Stage" filter replaces `show`); sort: (field, descending) pairs, applied
     to the subtasks of each task (data gives the stage order and repeat rules).
     A task is shown when it matches the filters, or when one of its subtasks
@@ -70,7 +71,10 @@ def task_rows(
     today = today or date.today()
 
     def matches(task: dict[str, Any]) -> bool:
-        if not all(filter_matches(column, key, task, today) for column, key in tests.items()):
+        if not all(
+            any(filter_matches(column, key, task, today) for key in keys)
+            for column, saved in tests.items() if (keys := filter_keys(saved))
+        ):
             return False
         if not needle:
             return True
@@ -202,11 +206,12 @@ def sort_value(data: dict[str, Any]) -> Any:
     return value
 
 
-def missing_filters(filters: dict[str, str], data: dict[str, Any]) -> list[str]:
-    """Columns whose saved choice no longer exists (e.g. a deleted tag), translated."""
+def missing_filters(filters: dict[str, Any], data: dict[str, Any]) -> list[str]:
+    """Columns with a saved choice that no longer exists (e.g. a deleted tag), translated."""
     return [
-        tr(column) for column, key in filters.items()
-        if column in TASK_COLUMNS and key not in {k for _l, k in filter_options(column, data)}
+        tr(column) for column, saved in filters.items()
+        if column in TASK_COLUMNS
+        and not set(filter_keys(saved)) <= {k for _l, k in filter_options(column, data)}
     ]
 
 
@@ -222,19 +227,45 @@ def is_overdue(task: dict[str, Any], today: date) -> bool:
     return bool(due) and not task["done"] and date.fromisoformat(due) < today
 
 
+def is_due_today(task: dict[str, Any], today: date) -> bool:
+    """An unfinished task that is due today."""
+    due = task.get("due_date")
+    return bool(due) and not task["done"] and date.fromisoformat(due) == today
+
+
+# Colours of the priority and urgency levels on the phone's dark background, as on
+# the computer: low (Maybe, Low) green, middle (Normal, Medium) yellow, high red.
+LEVEL_COLOURS = {
+    "Maybe": "6fdc7a", "Normal": "ffd54f", "Important": "ff6b5e",
+    "Low": "6fdc7a", "Medium": "ffd54f", "High": "ff6b5e",
+}
+
+
+def _markup_text(text: str) -> str:
+    """Text shown as itself in a Kivy label with markup on."""
+    return text.replace("&", "&amp;").replace("[", "&bl;").replace("]", "&br;")
+
+
 def task_details(task: dict[str, Any], today: date | None = None,
-                 rules: list[dict[str, Any]] | None = None) -> str:
-    """The small second line under a task's name (rules: the repeat rules, to name them)."""
+                 rules: list[dict[str, Any]] | None = None, markup: bool = False) -> str:
+    """The small second line under a task's name (rules: the repeat rules, to name them).
+
+    markup: for a Kivy label with markup on; the priority and urgency are coloured
+    (unless the task is done) and the rest is escaped.
+    """
+    coloured: dict[int, str] = {}  # index in parts -> colour
     parts = [task["stage"]]
     if task.get("due_date"):
         due = f"{tr('Due date')}: {task['due_date']}"
         if is_overdue(task, today or date.today()):
             due += f" {tr('(overdue)')}"
+        elif is_due_today(task, today or date.today()):
+            due += f" {tr('(today)')}"
         parts.append(due)
-    if task["priority"] != "Normal":
-        parts.append(tr(task["priority"]))
-    if task["urgency"] != "Medium":
-        parts.append(f"{tr('Urgency')}: {tr(task['urgency'])}")
+    coloured[len(parts)] = LEVEL_COLOURS.get(task["priority"], "")
+    parts.append(f"{tr('Priority')}: {tr(task['priority'])}")
+    coloured[len(parts)] = LEVEL_COLOURS.get(task["urgency"], "")
+    parts.append(f"{tr('Urgency')}: {tr(task['urgency'])}")
     if task["assignee"]:
         parts.append(task["assignee"])
     if task.get("location"):
@@ -251,7 +282,13 @@ def task_details(task: dict[str, Any], today: date | None = None,
             reset = datetime.fromisoformat(task["next_reset_at"]).astimezone()
             repeat += f" ⟳ {reset:%Y-%m-%d}"
         parts.append(repeat)
-    return " · ".join(parts)
+    if not markup:
+        return " · ".join(parts)
+    return " · ".join(
+        f"[color={coloured[index]}]{_markup_text(part)}[/color]"
+        if coloured.get(index) and not task["done"] else _markup_text(part)
+        for index, part in enumerate(parts)
+    )
 
 
 def next_stage_id(task: dict[str, Any], workflows: list[dict[str, Any]]) -> int | None:
