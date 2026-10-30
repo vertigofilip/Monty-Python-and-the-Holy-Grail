@@ -110,5 +110,5 @@ def test_applying_a_sort_preset_sorts_and_remembers_it(window: TodoApp) -> None:
     window._sort_menu.invoke(0)  # the preset's menu entry
     assert window._sort == [("Task", False)]
     assert load_sort() == [("Task", False)]  # kept for the next start, like Sort… does
-    names = [window.tree.item(iid, "text") for iid in window.tree.get_children()]
+    names = [window.tree.set(iid, "Task") for iid in window.tree.get_children()]
     assert names == sorted(names, key=todo_app.text_sort_key)

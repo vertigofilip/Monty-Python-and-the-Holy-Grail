@@ -9,7 +9,7 @@ source.dir = src
 source.include_exts = py
 # The program's logo (todo_db/logo.png, copied here by build_android.sh).
 icon.filename = logo.png
-version = 1.2
+version = 1.5
 # sqlite3 and sqlalchemy: the mode without a server keeps the tasks in a database on the phone.
 # filetype (for Kivy) and typing_extensions (for SQLAlchemy) are pure Python and copied into
 # src/ by build_android.sh: installing them with pip here breaks the build venv that the

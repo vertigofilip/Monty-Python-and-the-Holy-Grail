@@ -35,12 +35,13 @@ from todo_db.models import (
     TaskChange,
     User,
     UserRole,
+    Stage,
     Workflow,
     utcnow,
 )
 from todo_db.seed import add_missing_repeat_rules, seed
 from todo_db.services import TaskService
-from todo_db import templates
+from todo_db import management, templates
 
 from . import dbadmin
 from .maintenance import run_maintenance, scheduler
@@ -49,14 +50,19 @@ from .schemas import (
     CompressAllIn,
     CompressionOut,
     CompressTaskIn,
+    HistoryQuery,
     LoginIn,
+    NameIn,
     PublicUserOut,
     RepeatRuleOut,
     SettingsIO,
+    StageMove,
+    StageUpdate,
     SubtaskTemplateIn,
     SubtaskTemplateOut,
     SubtaskTemplateUpdate,
     TagOut,
+    TagUsageOut,
     TaskCreate,
     TaskMove,
     TaskOut,
@@ -238,6 +244,77 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             for r in db.scalars(select(RepeatRule).order_by(RepeatRule.id))
         ]
 
+    # -- workflows, stages and tags (shared by everyone; any user may change them) ----
+
+    def get_item(db: Session, model: type, item_id: int) -> Any:
+        item = db.get(model, item_id)
+        if item is None:
+            raise HTTPException(404, f"{model.__name__} {item_id} does not exist")
+        return item
+
+    def workflow_out(workflow: Workflow) -> WorkflowOut:
+        return WorkflowOut(**workflow_data(workflow))
+
+    @app.post("/workflows", status_code=201)
+    def add_workflow(body: NameIn, _: Me, db: Db) -> WorkflowOut:
+        return workflow_out(write(lambda: management.add_workflow(db, body.name)))
+
+    @app.patch("/workflows/{workflow_id}")
+    def rename_workflow(workflow_id: int, body: NameIn, _: Me, db: Db) -> WorkflowOut:
+        get_item(db, Workflow, workflow_id)
+        return workflow_out(write(lambda: management.rename_workflow(db, workflow_id, body.name)))
+
+    @app.delete("/workflows/{workflow_id}", status_code=204)
+    def delete_workflow(workflow_id: int, _: Me, db: Db) -> Response:
+        get_item(db, Workflow, workflow_id)
+        write(lambda: management.delete_workflow(db, workflow_id))
+        return Response(status_code=204)
+
+    @app.post("/workflows/{workflow_id}/stages", status_code=201)
+    def add_stage(workflow_id: int, body: NameIn, _: Me, db: Db) -> WorkflowOut:
+        get_item(db, Workflow, workflow_id)
+        stage = write(lambda: management.add_stage(db, workflow_id, body.name))
+        return workflow_out(stage.workflow)
+
+    @app.patch("/stages/{stage_id}")
+    def update_stage(stage_id: int, body: StageUpdate, _: Me, db: Db) -> WorkflowOut:
+        stage: Stage = get_item(db, Stage, stage_id)
+        if body.name is not None:
+            write(lambda: management.rename_stage(db, stage_id, body.name))
+        if body.is_final is not None:
+            write(lambda: management.set_stage_final(db, stage_id, body.is_final))
+        return workflow_out(stage.workflow)
+
+    @app.post("/stages/{stage_id}/move")
+    def move_stage(stage_id: int, body: StageMove, _: Me, db: Db) -> WorkflowOut:
+        get_item(db, Stage, stage_id)
+        return workflow_out(write(lambda: management.shift_stage(db, stage_id, body.delta)).workflow)
+
+    @app.delete("/stages/{stage_id}", status_code=204)
+    def delete_stage(stage_id: int, _: Me, db: Db) -> Response:
+        get_item(db, Stage, stage_id)
+        write(lambda: management.delete_stage(db, stage_id))
+        return Response(status_code=204)
+
+    @app.get("/tags/usage")
+    def tag_usage(_: Me, db: Db) -> list[TagUsageOut]:
+        return [TagUsageOut(**tag_data(tag), tasks=used) for tag, used in management.tag_usage(db)]
+
+    @app.post("/tags", status_code=201)
+    def add_tag(body: NameIn, _: Me, db: Db) -> TagOut:
+        return TagOut(**tag_data(write(lambda: management.add_tag(db, body.name))))
+
+    @app.patch("/tags/{tag_id}")
+    def rename_tag(tag_id: int, body: NameIn, _: Me, db: Db) -> TagOut:
+        get_item(db, Tag, tag_id)
+        return TagOut(**tag_data(write(lambda: management.rename_tag(db, tag_id, body.name))))
+
+    @app.delete("/tags/{tag_id}", status_code=204)
+    def delete_tag(tag_id: int, _: Me, db: Db) -> Response:
+        get_item(db, Tag, tag_id)
+        write(lambda: management.delete_tag(db, tag_id))
+        return Response(status_code=204)
+
     # -- subtask templates (shared by everyone; any user may change them) -----------
 
     def get_template(db: Session, template_id: int) -> None:
@@ -326,6 +403,11 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         get_task(db, task_id)
         write(lambda: TaskService(db).delete_task(task_id, user.id))
         return Response(status_code=204)
+
+    @app.post("/tasks/history")
+    def tasks_history(body: HistoryQuery, _: Me, db: Db) -> list[ChangeOut]:
+        """The changes of several tasks together, oldest first."""
+        return [ChangeOut(**change_data(c)) for c in TaskService(db).get_histories(body.task_ids)]
 
     @app.get("/tasks/{task_id}/history")
     def task_history(task_id: int, _: Me, db: Db) -> list[ChangeOut]:

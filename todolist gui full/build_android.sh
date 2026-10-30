@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the phone app as an Android package (.apk).
 #
-#   ./build_android.sh            build android/bin/todolist-1.2-*-debug.apk
+#   ./build_android.sh            build android/bin/todolist-1.5-*-debug.apk
 #   ./build_android.sh deploy     build and install on a phone connected by USB
 #   ./build_android.sh clean      remove the build (the next one starts over)
 #

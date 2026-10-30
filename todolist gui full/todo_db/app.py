@@ -25,10 +25,11 @@ from sqlalchemy.orm import Session
 
 from . import i18n, management, pick, settings, templates
 from .database import create_all, make_engine, make_session_factory
-from .management import ManagementError
+from .management import LocalManagement, ManagementError
 from .compression import COMPRESSION_NOTE, parse_summary
 from .remote import (
-    ApiClient, NotLoggedIn, RemoteAccount, RemoteError, RemoteTaskService, log_in, resume_login,
+    ApiClient, NotLoggedIn, RemoteAccount, RemoteError, RemoteManagement, RemoteTaskService, log_in,
+    resume_login,
 )
 from . import reminders
 from .reminders import (
@@ -37,12 +38,14 @@ from .reminders import (
 )
 from .i18n import tr, tr_n
 from .models import (
+    ChangeType,
     Priority,
     RepeatRule,
     RepeatUnit,
     Stage,
     Tag,
     Task,
+    TaskChange,
     Urgency,
     User,
     Workflow,
@@ -88,7 +91,24 @@ NEXT_STAGE_ACTIVE = "#23803A"
 LEVEL_COLOURS = {0: "#B9E4BC", 1: "#FFE98A", 2: "#F8B4B4"}
 LEVEL_COLUMNS = ("Priority", "Urgency")
 
-HISTORY_COLUMNS = ("When", "Who", "Change", "Field", "Old value", "New value")
+# The task list's columns from left to right. A Treeview always draws its tree column
+# (#0, with the subtask indentation and the ▸ arrows) first, so the stage goes there and
+# the name is an ordinary column, its subtasks indented by hand (NAME_INDENT per level).
+LIST_COLUMNS = (TASK_COLUMNS[0], "Task", *TASK_COLUMNS[1:])
+LIST_WIDTHS = {
+    "Stage": 150, "Task": 320, "Progress": 70, "Repeat": 120, "Due date": 90, "Priority": 80,
+    "Urgency": 80, "Assignee": 130, "Location": 120, "Tags": 120,
+}
+NAME_INDENT = "    "
+
+
+def column_id(field: str) -> str:
+    """The Treeview's name for a task list column: #0 for the first."""
+    return "#0" if field == LIST_COLUMNS[0] else field
+
+
+HISTORY_COLUMNS = ("When", "Task", "Who", "Change", "Field", "Old value", "New value")
+HISTORY_TEXT_FILTERS = ("Task", "Old value", "New value")  # the others have drop-downs
 
 
 def repeat_label(rule: RepeatRule) -> str:
@@ -608,10 +628,15 @@ class UsersDialog(tk.Toplevel):
 class WorkflowsDialog(tk.Toplevel):
     """Modal window to manage workflows (progression types) and their stages."""
 
-    def __init__(self, master: tk.Misc, session: Session) -> None:
+    @property
+    def session(self) -> Session:
+        """Where to read from; in server mode a fresh copy after every change."""
+        return self.manage.session
+
+    def __init__(self, master: tk.Misc, manage: LocalManagement | RemoteManagement) -> None:
         super().__init__(master)
         self.title(tr("Workflows"))
-        self.session = session
+        self.manage = manage  # on the local database or on the server
         self.transient(master)  # type: ignore[arg-type]
 
         body = ttk.Frame(self, padding=12)
@@ -729,7 +754,7 @@ class WorkflowsDialog(tk.Toplevel):
         """Create a workflow with a starting "To do" and a final "Done" stage."""
         name = self._ask_name("New workflow")
         if name is not None:
-            workflow = self._change(lambda: management.add_workflow(self.session, name))
+            workflow = self._change(lambda: self.manage.add_workflow(name))
             self.reload(workflow.id if workflow else None)
 
     def rename_workflow(self) -> None:
@@ -740,7 +765,7 @@ class WorkflowsDialog(tk.Toplevel):
         name = self._ask_name("Rename workflow", workflow.name)
         if name is not None:
             workflow_id = workflow.id
-            self._change(lambda: management.rename_workflow(self.session, workflow_id, name))
+            self._change(lambda: self.manage.rename_workflow(workflow_id, name))
             self.reload(workflow_id)
 
     def delete_workflow(self) -> None:
@@ -748,13 +773,13 @@ class WorkflowsDialog(tk.Toplevel):
         workflow = self._workflow()
         if workflow is None:
             return
-        if self._change(lambda: management.check_delete_workflow(self.session, workflow.id)) is None:
+        if self._change(lambda: self.manage.check_delete_workflow(workflow.id)) is None:
             return
         question = tr('Delete workflow "{name}"?').format(name=workflow.name)
         if not messagebox.askyesno(tr("Delete"), question, parent=self):
             return
         workflow_id = workflow.id
-        self._change(lambda: management.delete_workflow(self.session, workflow_id))
+        self._change(lambda: self.manage.delete_workflow(workflow_id))
         self.reload()
 
     # -- stage actions ------------------------------------------------------
@@ -768,7 +793,7 @@ class WorkflowsDialog(tk.Toplevel):
         if name is None:
             return
         workflow_id = workflow.id
-        stage = self._change(lambda: management.add_stage(self.session, workflow_id, name))
+        stage = self._change(lambda: self.manage.add_stage(workflow_id, name))
         self.reload(workflow_id, stage.id if stage else None)
 
     def rename_stage(self) -> None:
@@ -779,7 +804,7 @@ class WorkflowsDialog(tk.Toplevel):
         name = self._ask_name("Rename stage", stage.name)
         if name is not None:
             stage_id, workflow_id = stage.id, stage.workflow_id
-            self._change(lambda: management.rename_stage(self.session, stage_id, name))
+            self._change(lambda: self.manage.rename_stage(stage_id, name))
             self.reload(workflow_id, stage_id)
 
     def shift_stage(self, delta: int) -> None:
@@ -788,7 +813,7 @@ class WorkflowsDialog(tk.Toplevel):
         if stage is None:
             return
         stage_id, workflow_id = stage.id, stage.workflow_id
-        self._change(lambda: management.shift_stage(self.session, stage_id, delta))
+        self._change(lambda: self.manage.shift_stage(stage_id, delta))
         self.reload(workflow_id, stage_id)
 
     def toggle_final(self) -> None:
@@ -796,7 +821,7 @@ class WorkflowsDialog(tk.Toplevel):
         stage = self._stage()
         if stage is not None:
             stage_id, workflow_id, final = stage.id, stage.workflow_id, not stage.is_final
-            self._change(lambda: management.set_stage_final(self.session, stage_id, final))
+            self._change(lambda: self.manage.set_stage_final(stage_id, final))
             self.reload(workflow_id, stage_id)
 
     def delete_stage(self) -> None:
@@ -804,23 +829,28 @@ class WorkflowsDialog(tk.Toplevel):
         stage = self._stage()
         if stage is None:
             return
-        if self._change(lambda: management.check_delete_stage(self.session, stage.id)) is None:
+        if self._change(lambda: self.manage.check_delete_stage(stage.id)) is None:
             return
         question = tr('Delete stage "{name}"?').format(name=stage.name)
         if not messagebox.askyesno(tr("Delete"), question, parent=self):
             return
         stage_id, workflow_id = stage.id, stage.workflow_id
-        self._change(lambda: management.delete_stage(self.session, stage_id))
+        self._change(lambda: self.manage.delete_stage(stage_id))
         self.reload(workflow_id)
 
 
 class TagsDialog(tk.Toplevel):
     """Modal window to add, rename and delete tags."""
 
-    def __init__(self, master: tk.Misc, session: Session) -> None:
+    @property
+    def session(self) -> Session:
+        """Where to read from; in server mode a fresh copy after every change."""
+        return self.manage.session
+
+    def __init__(self, master: tk.Misc, manage: LocalManagement | RemoteManagement) -> None:
         super().__init__(master)
         self.title(tr("Tags"))
-        self.session = session
+        self.manage = manage  # on the local database or on the server
         self.transient(master)  # type: ignore[arg-type]
 
         body = ttk.Frame(self, padding=12)
@@ -855,7 +885,7 @@ class TagsDialog(tk.Toplevel):
     def reload(self, select_id: int | None = None) -> None:
         """Reload the tag list with the number of tasks using each tag."""
         self.tags.delete(*self.tags.get_children())
-        for tag, used in management.tag_usage(self.session):
+        for tag, used in self.manage.tag_usage():
             self.tags.insert("", "end", iid=str(tag.id), values=(tag.name, used))
         if select_id is not None and self.tags.exists(str(select_id)):
             self.tags.selection_set(str(select_id))
@@ -886,7 +916,7 @@ class TagsDialog(tk.Toplevel):
         """Create a new tag."""
         name = self._ask_name("New tag")
         if name is not None:
-            tag = self._change(lambda: management.add_tag(self.session, name))
+            tag = self._change(lambda: self.manage.add_tag(name))
             self.reload(tag.id if tag else None)
 
     def rename_tag(self) -> None:
@@ -897,7 +927,7 @@ class TagsDialog(tk.Toplevel):
         name = self._ask_name("Rename tag", tag.name)
         if name is not None:
             tag_id = tag.id
-            self._change(lambda: management.rename_tag(self.session, tag_id, name))
+            self._change(lambda: self.manage.rename_tag(tag_id, name))
             self.reload(tag_id)
 
     def delete_tag(self) -> None:
@@ -905,13 +935,13 @@ class TagsDialog(tk.Toplevel):
         tag = self._selected()
         if tag is None:
             return
-        if self._change(lambda: management.check_delete_tag(self.session, tag.id)) is None:
+        if self._change(lambda: self.manage.check_delete_tag(tag.id)) is None:
             return
         question = tr('Delete tag "{name}"?').format(name=tag.name)
         if not messagebox.askyesno(tr("Delete"), question, parent=self):
             return
         tag_id = tag.id
-        self._change(lambda: management.delete_tag(self.session, tag_id))
+        self._change(lambda: self.manage.delete_tag(tag_id))
         self.reload()
 
 
@@ -1959,7 +1989,7 @@ class PresetsDialog(tk.Toplevel):
 
 
 class SortDialog(tk.Toplevel):
-    """Modal window to arrange the sort order of the task list; `result` holds it on OK."""
+    """Modal window to arrange a list's sort order; `result` holds it on OK."""
 
     def __init__(
         self,
@@ -1968,15 +1998,17 @@ class SortDialog(tk.Toplevel):
         preset_name: str | None = None,
         taken: set[str] = frozenset(),  # type: ignore[assignment]
         title: str | None = None,
+        fields: tuple[str, ...] = SORT_FIELDS,
     ) -> None:
         """With preset_name (even ""), it edits a sort preset: the name is asked too
-        and may not be one of `taken` (case is ignored)."""
+        and may not be one of `taken` (case is ignored). `fields`: what can be sorted by."""
         super().__init__(master)
         self.title(title or tr("Sorting"))
         self.result: list[tuple[str, bool]] | None = None
         self.result_name = ""
         self._taken = {name.casefold() for name in taken}
         self._sort = list(sort)
+        self._fields = fields
         self._free: list[str] = []
         self.transient(master)  # type: ignore[arg-type]
         self.resizable(False, False)
@@ -2041,7 +2073,7 @@ class SortDialog(tk.Toplevel):
     def _show(self, select: str | None = None) -> None:
         """Redraw both lists, optionally selecting a chosen field."""
         chosen = [field for field, _ in self._sort]
-        self._free = [field for field in SORT_FIELDS if field not in chosen]
+        self._free = [field for field in self._fields if field not in chosen]
         self._available.delete(0, "end")
         for field in self._free:
             self._available.insert("end", tr(field))
@@ -2141,6 +2173,7 @@ class TodoApp(tk.Tk):
         self._collapsed: set[str] = set()
         self._progress: dict[int, float] = {}
         self._sort = load_sort()
+        self._history_sort = parse_sort(settings.load_setting("history_sort"), HISTORY_COLUMNS)
         self.presets = load_presets()
         self.sort_presets = load_sort_presets()
         # Reminders found by the background thread wait here for the window's own thread.
@@ -2228,11 +2261,10 @@ class TodoApp(tk.Tk):
         self.bind("<Control-q>", lambda _event: self.quit_program())
         manage = tk.Menu(menubar, tearoff=False)
         if self._account:
-            # Workflows and tags cannot be changed through the server yet.
             users_state = "normal" if self._account.is_admin else "disabled"
             manage.add_command(label=tr("Users…"), command=self.manage_users, state=users_state)
-            manage.add_command(label=tr("Workflows…"), state="disabled")
-            manage.add_command(label=tr("Tags…"), state="disabled")
+            manage.add_command(label=tr("Workflows…"), command=self.manage_workflows)
+            manage.add_command(label=tr("Tags…"), command=self.manage_tags)
         else:
             manage.add_command(label=tr("Users…"), command=self.manage_users)
             manage.add_command(label=tr("Workflows…"), command=self.manage_workflows)
@@ -2285,14 +2317,13 @@ class TodoApp(tk.Tk):
         panes.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
         self.tree = self._make_tree(
-            panes, TASK_COLUMNS, on_scroll=self._tree_moved, show="tree headings", height=14
+            panes, LIST_COLUMNS[1:], on_scroll=self._tree_moved, show="tree headings", height=14
         )
         self._build_filters()
-        self.tree.heading("#0", text=tr("Task"))
+        for field, width in LIST_WIDTHS.items():
+            self.tree.column(column_id(field), width=width, stretch=False)
         # minwidth: narrow windows scroll sideways instead of squeezing the names.
-        self.tree.column("#0", width=320, minwidth=200)
-        for column, width in zip(TASK_COLUMNS, (100, 90, 80, 80, 130, 120, 120, 70, 120)):
-            self.tree.column(column, width=width, stretch=False)
+        self.tree.column("Task", minwidth=200, stretch=True)
         self.tree.tag_configure("done", foreground="gray55")
         self.tree.tag_configure("overdue", foreground="red3")
         self.tree.tag_configure("today", foreground=DUE_TODAY_COLOUR)
@@ -2312,8 +2343,10 @@ class TodoApp(tk.Tk):
         for sequence in ("<<TreeviewOpen>>", "<<TreeviewClose>>"):
             self.tree.bind(sequence, lambda _event: self.after_idle(self._tree_moved), add="+")
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self.show_history())
-        self.tree.bind("<Double-1>", lambda _event: self.edit_task())
+        self.tree.bind("<Button-1>", self._tree_clicked)
+        self.tree.bind("<Double-1>", lambda event: self._edit_row(self.tree.identify_row(event.y)))
         self.tree.bind("<Return>", lambda _event: self.edit_task())
+        self.bind("<Escape>", lambda _event: self.unselect())
         self.tree.bind("<Delete>", lambda _event: self.delete())
         self._tooltip = TreeTooltip(self.tree, self._task_description)
 
@@ -2324,9 +2357,24 @@ class TodoApp(tk.Tk):
             "<Configure>",
             lambda event: self._description.configure(wraplength=max(event.width - 4, 100)),
         )
-        self.history = self._make_tree(details, HISTORY_COLUMNS, show="headings", height=8)
-        for column, width in zip(HISTORY_COLUMNS, (140, 130, 100, 100, 200, 200)):
+        history_actions = ttk.Frame(details)
+        history_actions.pack(fill="x", pady=(0, 4))
+        ttk.Button(history_actions, text=tr("Sort history…"), command=self.open_history_sort).pack(
+            side="left"
+        )
+        ttk.Button(
+            history_actions, text=tr("Clear history filters"), command=self.clear_history_filters
+        ).pack(side="left", padx=(4, 0))
+        ttk.Button(history_actions, text=tr("Unselect task"), command=self.unselect).pack(
+            side="left", padx=(4, 0)
+        )
+        self.history = self._make_tree(
+            details, HISTORY_COLUMNS, on_scroll=self._place_history_filters, show="headings",
+            height=8,
+        )
+        for column, width in zip(HISTORY_COLUMNS, (140, 200, 130, 100, 100, 200, 200)):
             self.history.column(column, width=width, minwidth=width)
+        self._build_history_filters()
         panes.add(details, weight=1)
 
         self.refresh()
@@ -2416,7 +2464,7 @@ class TodoApp(tk.Tk):
 
     def manage_workflows(self) -> None:
         """Open the workflows window, then pick up whatever changed there."""
-        self.wait_window(WorkflowsDialog(self, self.session))
+        self.wait_window(WorkflowsDialog(self, self._management()))
         self.refresh()
 
     def server_settings(self) -> None:
@@ -2436,8 +2484,14 @@ class TodoApp(tk.Tk):
 
     def manage_tags(self) -> None:
         """Open the tags window, then pick up whatever changed there."""
-        self.wait_window(TagsDialog(self, self.session))
+        self.wait_window(TagsDialog(self, self._management()))
         self.refresh()
+
+    def _management(self) -> LocalManagement | RemoteManagement:
+        """Changes to workflows and tags: on the server when logged in to one."""
+        if self._account:
+            return RemoteManagement(self._account)
+        return LocalManagement(self.session)
 
     def _templates(self) -> LocalTemplates | RemoteTemplates:
         if self._account:
@@ -2465,7 +2519,7 @@ class TodoApp(tk.Tk):
         ttk.Button(name_box, text="✕", width=2, command=self.clear_filters).pack(
             side="left", padx=(2, 0)
         )
-        self._filter_widgets: dict[str, tk.Widget] = {"#0": name_box}
+        self._filter_widgets: dict[str, tk.Widget] = {"Task": name_box}
         self._column_filters: dict[str, MultiChoice] = {}
         for column in TASK_COLUMNS:
             choice = MultiChoice(self._filter_bar, [], self.refresh)
@@ -2476,13 +2530,18 @@ class TodoApp(tk.Tk):
         """Line the filter widgets up with the current column positions and widths."""
         if not hasattr(self, "_filter_widgets") or not self.tree.winfo_ismapped():
             return
-        columns = ("#0", *TASK_COLUMNS)
-        total = sum(int(self.tree.column(column, "width")) for column in columns)
-        scrolled = round(float(self.tree.xview()[0]) * total)
-        x = self.tree.winfo_rootx() - self._filter_bar.winfo_rootx() - scrolled
-        for column in columns:
-            width = int(self.tree.column(column, "width"))
-            self._filter_widgets[column].place(x=x + 1, y=2, width=max(width - 2, 10), height=26)
+        widths = {field: int(self.tree.column(column_id(field), "width")) for field in LIST_COLUMNS}
+        self._line_up(self.tree, self._filter_bar, self._filter_widgets, widths)
+
+    @staticmethod
+    def _line_up(
+        tree: ttk.Treeview, bar: ttk.Frame, widgets: dict[str, tk.Widget], widths: dict[str, int]
+    ) -> None:
+        """Place each filter widget in the bar over its column, scrolled along with the list."""
+        scrolled = round(float(tree.xview()[0]) * sum(widths.values()))
+        x = tree.winfo_rootx() - bar.winfo_rootx() - scrolled
+        for column, width in widths.items():
+            widgets[column].place(x=x + 1, y=2, width=max(width - 2, 10), height=26)
             x += width
 
     def _filter_options(self, column: str) -> list[tuple[str, Filter | None]]:
@@ -2747,14 +2806,18 @@ class TodoApp(tk.Tk):
 
     def _update_headings(self) -> None:
         """Show ▲/▼ (and the level, if several) on the columns being sorted by."""
-        levels = {field: (level, desc) for level, (field, desc) in enumerate(self._sort, 1)}
         for field in ("Task", *TASK_COLUMNS):
-            text = tr(field)
-            if field in levels:
-                level, descending = levels[field]
-                number = str(level) if len(self._sort) > 1 else ""
-                text += f" {'▼' if descending else '▲'}{number}"
-            self.tree.heading("#0" if field == "Task" else field, text=text)
+            self.tree.heading(column_id(field), text=self._heading(field, self._sort))
+
+    @staticmethod
+    def _heading(field: str, sort: list[tuple[str, bool]]) -> str:
+        """A column's title with its place in the sort order, if any."""
+        levels = {name: (level, desc) for level, (name, desc) in enumerate(sort, 1)}
+        if field not in levels:
+            return tr(field)
+        level, descending = levels[field]
+        number = str(level) if len(sort) > 1 else ""
+        return f"{tr(field)} {'▼' if descending else '▲'}{number}"
 
     # -- display ------------------------------------------------------------
 
@@ -2781,7 +2844,9 @@ class TodoApp(tk.Tk):
         self._tree_moved()
         self.show_history()
 
-    def _insert(self, task: Task, parent_iid: str, tests: list[Predicate], filtering: bool) -> bool:
+    def _insert(
+        self, task: Task, parent_iid: str, tests: list[Predicate], filtering: bool, depth: int = 0
+    ) -> bool:
         """Add a task row and its subtasks; return whether anything was shown.
 
         A task that does not match is still shown (in grey italics) when one of
@@ -2808,23 +2873,23 @@ class TodoApp(tk.Tk):
             parent_iid,
             "end",
             iid=iid,
-            text=task.name,
+            text=task.stage.name,
             open=filtering or iid not in self._collapsed,
             tags=row_tags,
-            values=(
-                task.stage.name,
+            values=(  # in the order of LIST_COLUMNS[1:]
+                NAME_INDENT * depth + task.name,
+                f"{self._progress[task.id]:.0f}%",
+                repeat,
                 task.due_date.isoformat() if task.due_date else "",
                 tr(task.priority.name),
                 tr(task.urgency.name),
                 task.assignee.name if task.assignee else "",
                 task.location or "",
                 ", ".join(sorted(tag.name for tag in task.tags)),
-                f"{self._progress[task.id]:.0f}%",
-                repeat,
             ),
         )
         shown_subtasks = [
-            self._insert(subtask, iid, tests, filtering)
+            self._insert(subtask, iid, tests, filtering, depth + 1)
             for subtask in self._sorted(list(task.subtasks))
         ]
         if self._matches(task, tests):
@@ -2875,6 +2940,9 @@ class TodoApp(tk.Tk):
         def choose(_event: tk.Event) -> None:
             self._tooltip.hide()
             self.tree.focus_set()
+            if cell.iid in self.tree.selection():  # type: ignore[attr-defined]
+                self.unselect()
+                return
             self.tree.focus(cell.iid)  # type: ignore[attr-defined]
             self.tree.selection_set(cell.iid)  # type: ignore[attr-defined]
 
@@ -2888,7 +2956,7 @@ class TodoApp(tk.Tk):
             )
 
         cell.bind("<Button-1>", choose)
-        cell.bind("<Double-1>", lambda _event: self.edit_task())
+        cell.bind("<Double-1>", lambda _event: self._edit_row(cell.iid))  # type: ignore[attr-defined]
         cell.bind("<Button-4>", lambda _event: scroll(-3))
         cell.bind("<Button-5>", lambda _event: scroll(3))
         cell.bind("<MouseWheel>", lambda event: scroll(-3 if event.delta > 0 else 3))
@@ -2902,31 +2970,180 @@ class TodoApp(tk.Tk):
         return (task.description or "") if task else ""
 
     def show_history(self) -> None:
-        """Show the description and history of the selected task."""
-        self.history.delete(*self.history.get_children())
+        """Show the description and history of the selected task, or with none selected
+        the history of every task in the list."""
         task = self._selected(warn=False)
         self._description.configure(text=(task.description or "") if task else "")
-        if task is None:
-            return
-        for change in self.service.get_history(task.id):
-            summary = parse_summary(change)
-            if summary is not None:
-                old_text, new_text = self._summary_texts(summary)
+        if task:
+            self._history_changes = self.service.get_history(task.id)
+        else:
+            shown = self._shown_task_ids()
+            self._history_changes = self.service.get_histories(shown) if shown else []
+        self._history_fields |= {c.field_name for c in self._history_changes if c.field_name}
+        for column, choice in self._history_filters.items():
+            choice.set_options(self._history_filter_options(column))
+        self._show_history_rows()
+
+    def _shown_task_ids(self, parent: str = "") -> list[int]:
+        """The tasks in the list, closed parents' subtasks included."""
+        shown: list[int] = []
+        for iid in self.tree.get_children(parent):
+            shown.append(int(iid))
+            shown += self._shown_task_ids(iid)
+        return shown
+
+    def _tree_clicked(self, event: tk.Event) -> str | None:
+        """A click on the selected task or on the empty space below the tasks unselects."""
+        if self.tree.identify_region(event.x, event.y) in ("heading", "separator"):
+            return None
+        iid = self.tree.identify_row(event.y)
+        if "indicator" in self.tree.identify_element(event.x, event.y):
+            return None  # opens or closes the subtasks
+        if iid and iid not in self.tree.selection():
+            return None  # selected as usual
+        self.unselect()
+        return "break"
+
+    def _edit_row(self, iid: str) -> None:
+        """Edit the double-clicked task (its first click may have unselected it)."""
+        if iid:
+            self.tree.selection_set(iid)
+            self.edit_task()
+
+    def unselect(self) -> None:
+        """Select no task: the history then covers all the tasks in the list."""
+        self.tree.selection_remove(*self.tree.selection())
+        self.tree.focus("")
+
+    def _show_history_rows(self) -> None:
+        """List the selected task's changes with the history's filters and sort order."""
+        self.history.delete(*self.history.get_children())
+        for field in HISTORY_COLUMNS:
+            self.history.heading(field, text=self._heading(field, self._history_sort))
+        tests = [test for choice in self._history_filters.values() if (test := choice.test())]
+        searches = {
+            HISTORY_COLUMNS.index(column): text
+            for column, variable in self._history_texts.items()
+            if (text := variable.get().strip().casefold())
+        }
+        rows = [
+            (change, values)
+            for change in self._history_changes
+            if all(test(change) for test in tests)
+            for values in (self._history_row(change),)
+            if all(text in values[index].casefold() for index, text in searches.items())
+        ]
+        for _change, values in sorted_by(rows, self._history_sort, self._history_sort_value):
+            self.history.insert("", "end", values=values)
+
+    def _history_row(self, change: TaskChange) -> tuple[str, ...]:
+        """The texts of a change's row, in the order of HISTORY_COLUMNS."""
+        summary = parse_summary(change)
+        if summary is not None:
+            old_text, new_text = self._summary_texts(summary)
+        else:
+            old_text = self._history_value(change.field_name, change.old_value)
+            new_text = self._history_value(change.field_name, change.new_value)
+        task = self.session.get(Task, change.task_id)
+        return (
+            f"{change.changed_at.astimezone():%Y-%m-%d %H:%M:%S}",
+            task.name if task else "",
+            change.changed_by.name if change.changed_by else tr("system"),
+            tr(change.change_type.name),
+            tr(change.field_name or ""),
+            old_text,
+            new_text,
+        )
+
+    @staticmethod
+    def _history_sort_value(field: str, row: tuple[TaskChange, tuple[str, ...]]) -> Any:
+        """The value a history row is sorted by for one field; None (empty) sorts last."""
+        change, values = row
+        if field == "When":
+            return change.changed_at
+        text = values[HISTORY_COLUMNS.index(field)]
+        return text_sort_key(text) if text else None
+
+    def _build_history_filters(self) -> None:
+        """Create the history's filter row, above its column headings like the tasks' one."""
+        self._history_bar = ttk.Frame(self.history.master, height=30)
+        self._history_bar.grid(row=0, column=0, sticky="ew", pady=(2, 2))
+        self._history_changes: list[TaskChange] = []
+        self._history_fields: set[str] = set()  # seen so far: choices stay when the task changes
+        self._history_filters: dict[str, MultiChoice] = {}
+        self._history_texts: dict[str, tk.StringVar] = {}
+        self._history_widgets: dict[str, tk.Widget] = {}
+        for column in HISTORY_COLUMNS:
+            if column in HISTORY_TEXT_FILTERS:
+                variable = tk.StringVar(self)
+                variable.trace_add("write", lambda *_args: self._show_history_rows())
+                self._history_texts[column] = variable
+                self._history_widgets[column] = ttk.Entry(self._history_bar, textvariable=variable)
             else:
-                old_text = self._history_value(change.field_name, change.old_value)
-                new_text = self._history_value(change.field_name, change.new_value)
-            self.history.insert(
-                "",
-                "end",
-                values=(
-                    f"{change.changed_at.astimezone():%Y-%m-%d %H:%M:%S}",
-                    change.changed_by.name if change.changed_by else tr("system"),
-                    tr(change.change_type.name),
-                    tr(change.field_name or ""),
-                    old_text,
-                    new_text,
-                ),
+                choice = MultiChoice(self._history_bar, [], self._show_history_rows)
+                self._history_filters[column] = choice
+                self._history_widgets[column] = choice
+        for widget in (self._history_bar, self.history):
+            widget.bind(
+                "<Configure>", lambda _event: self.after_idle(self._place_history_filters), add="+"
             )
+
+    def _place_history_filters(self) -> None:
+        """Line the history's filter widgets up with its columns."""
+        if not hasattr(self, "_history_widgets") or not self.history.winfo_ismapped():
+            return
+        widths = {column: int(self.history.column(column, "width")) for column in HISTORY_COLUMNS}
+        self._line_up(self.history, self._history_bar, self._history_widgets, widths)
+
+    def _history_filter_options(self, column: str) -> list[tuple[str, Filter | None]]:
+        """The choices of one history column's filter, each with its test."""
+        options: list[tuple[str, Filter | None]] = [(tr("All"), None)]
+
+        def add(label: str, key: str, test: Callable[[TaskChange], bool]) -> None:
+            options.append((label, Filter(key, test)))
+
+        def days_ago(change: TaskChange) -> int:
+            return (date.today() - change.changed_at.astimezone().date()).days
+
+        if column == "When":
+            add(tr("(today)"), "today", lambda change: days_ago(change) == 0)
+            add(tr("(last 7 days)"), "week", lambda change: days_ago(change) < 7)
+            add(tr("(last 30 days)"), "month", lambda change: days_ago(change) < 30)
+            add(tr("(older)"), "older", lambda change: days_ago(change) >= 30)
+        elif column == "Who":
+            add(tr("system"), "system", lambda change: change.changed_by is None)
+            for user in self.session.scalars(select(User).order_by(User.name)):
+                add(user.name, f"id:{user.id}",
+                    lambda change, i=user.id: change.changed_by_id == i)
+        elif column == "Change":
+            for kind in ChangeType:
+                add(tr(kind.name), kind.name, lambda change, k=kind: change.change_type is k)
+        elif column == "Field":
+            add(tr(NONE), "none", lambda change: not change.field_name)
+            for name in sorted(self._history_fields, key=lambda field: text_sort_key(tr(field))):
+                add(tr(name), f"name:{name}", lambda change, n=name: change.field_name == n)
+        return options
+
+    def clear_history_filters(self) -> None:
+        """Reset the history's filters to show every change."""
+        for choice in self._history_filters.values():
+            choice.set_keys([])
+        for variable in self._history_texts.values():
+            variable.set("")
+        self._show_history_rows()
+
+    def open_history_sort(self) -> None:
+        """Let the user arrange the history's sort order, then apply and remember it."""
+        dialog = SortDialog(
+            self, self._history_sort, title=tr("Sorting the history"), fields=HISTORY_COLUMNS
+        )
+        self.wait_window(dialog)
+        if dialog.result is not None:
+            self._history_sort = dialog.result
+            settings.save_setting(
+                "history_sort", [[field, descending] for field, descending in dialog.result]
+            )
+            self._show_history_rows()
 
     def _summary_texts(self, summary: dict[str, Any]) -> tuple[str, str]:
         """A compressed history row as (time span and count, net field changes)."""

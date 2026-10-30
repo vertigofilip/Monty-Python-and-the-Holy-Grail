@@ -260,6 +260,15 @@ class TaskService:
         )
         return list(self.session.scalars(query))
 
+    def get_histories(self, task_ids: list[int]) -> list[TaskChange]:
+        """The changes of all these tasks together, oldest first."""
+        query = (
+            select(TaskChange)
+            .where(TaskChange.task_id.in_(task_ids))
+            .order_by(TaskChange.changed_at, TaskChange.id)
+        )
+        return list(self.session.scalars(query))
+
     def get_progress_percent(self, task_id: int) -> float:
         """How far the task is, 0-100.
 

@@ -13,14 +13,16 @@ from typing import Any
 
 from . import settings
 
+# The task list's columns besides the name, in the order shown (the name comes
+# right after the stage).
 TASK_COLUMNS = (
-    "Stage", "Due date", "Priority", "Urgency", "Assignee", "Location", "Tags", "Progress",
-    "Repeat",
+    "Stage", "Progress", "Repeat", "Due date", "Priority", "Urgency", "Assignee", "Location",
+    "Tags",
 )
 # Fields the task list can be sorted by: the columns plus the creation time.
 SORT_FIELDS = ("Task", *TASK_COLUMNS, "Created at")
 # Fields that start out descending when added to the sort (most important first).
-DESCENDING_FIRST = {"Priority", "Urgency"}
+DESCENDING_FIRST = {"Priority", "Urgency", "When"}
 
 
 # One column's saved filter: a key, or a list of keys when several are chosen (a
@@ -118,14 +120,14 @@ def save_sort(sort: list[tuple[str, bool]] | tuple[tuple[str, bool], ...]) -> No
     settings.save_setting("sort", [[field, descending] for field, descending in sort])
 
 
-def parse_sort(saved: Any) -> list[tuple[str, bool]]:
+def parse_sort(saved: Any, fields: tuple[str, ...] = SORT_FIELDS) -> list[tuple[str, bool]]:
     """[[field, descending], ...] from settings.json, without unknown or repeated fields."""
     if not isinstance(saved, list):
         return []
     sort: list[tuple[str, bool]] = []
     for item in saved:
         if (
-            isinstance(item, list) and len(item) == 2 and item[0] in SORT_FIELDS
+            isinstance(item, list) and len(item) == 2 and item[0] in fields
             and item[0] not in [field for field, _ in sort]
         ):
             sort.append((item[0], bool(item[1])))

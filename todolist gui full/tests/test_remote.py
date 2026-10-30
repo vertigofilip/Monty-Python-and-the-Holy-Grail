@@ -252,3 +252,148 @@ def test_window_adds_subtasks_from_the_servers_templates(
         app.destroy()
     store.delete(pack["id"])
     assert store.list() == []
+
+
+def test_workflows_and_tags_are_changed_on_the_server(server: str) -> None:
+    from todo_db.management import ManagementError
+    from todo_db.models import Tag
+
+    account = log_in(server, "ola@example.com", PASSWORD, remember=False)  # not an admin
+    other = log_in(server, "ada@example.com", PASSWORD, remember=False)
+    manage = remote.RemoteManagement(account)
+
+    trip = manage.add_workflow("Trip")
+    assert [s.name for s in trip.stages] == ["To do", "Done"]
+    with pytest.raises(ManagementError, match="already exists"):
+        manage.add_workflow("Trip")
+    pack = manage.add_stage(trip.id, "Pack")
+    assert [s.name for s in manage.session.get(Workflow, trip.id).stages] == ["To do", "Done", "Pack"]
+    manage.shift_stage(pack.id, -1)
+    manage.rename_stage(pack.id, "Packing")
+    manage.set_stage_final(pack.id, True)
+    manage.rename_workflow(trip.id, "Holiday")
+    other.mirror.sync()  # someone else sees all of it
+    holiday = other.mirror.session.get(Workflow, trip.id)
+    assert holiday.name == "Holiday"
+    assert [(s.name, s.is_final) for s in holiday.stages] == [
+        ("To do", False), ("Packing", True), ("Done", True)
+    ]
+
+    task = RemoteTaskService(account).create_task("Tent", pack.id, account.user["id"])
+    with pytest.raises(ManagementError, match="used by 1 task"):
+        manage.check_delete_stage(pack.id)
+    RemoteTaskService(account).delete_task(task.id, account.user["id"])
+    manage.check_delete_stage(pack.id)
+    manage.delete_stage(pack.id)
+    manage.delete_workflow(trip.id)
+    assert manage.session.get(Workflow, trip.id) is None
+
+    tag = manage.add_tag("camping")
+    manage.rename_tag(tag.id, "outdoors")
+    assert [(t.name, used) for t, used in manage.tag_usage() if t.id == tag.id] == [("outdoors", 0)]
+    manage.check_delete_tag(tag.id)
+    manage.delete_tag(tag.id)
+    assert manage.session.get(Tag, tag.id) is None
+
+
+def test_server_refuses_workflow_changes_that_break_tasks(server: str) -> None:
+    import httpx
+
+    account = log_in(server, "ola@example.com", PASSWORD, remember=False)
+    RemoteTaskService(account).create_task("Ship", stage_id(account, "Software", "Review"), 0)
+    token = account.api.token
+    auth = {"Authorization": f"Bearer {token}"}
+    workflows = httpx.get(f"{server}/workflows", headers=auth).json()
+    assert httpx.post(f"{server}/workflows", json={"name": "X"}).status_code == 401
+    used = next(w for w in workflows if w["name"] == "Software")
+    assert httpx.delete(f"{server}/workflows/{used['id']}", headers=auth).status_code == 400
+    assert httpx.delete(f"{server}/workflows/999", headers=auth).status_code == 404
+    assert httpx.patch(f"{server}/stages/999", json={"name": "Y"}, headers=auth).status_code == 404
+    stage = used["stages"][0]["id"]
+    assert httpx.post(f"{server}/stages/{stage}/move", json={"delta": 5},
+                      headers=auth).status_code == 422
+    usage = httpx.get(f"{server}/tags/usage", headers=auth).json()
+    assert usage and all({"id", "name", "tasks"} == set(tag) for tag in usage)
+
+
+def test_window_opens_workflows_and_tags_in_server_mode(server: str) -> None:
+    tk = pytest.importorskip("tkinter")
+
+    from todo_db import app as todo_app
+
+    try:
+        tk.Tk().destroy()
+    except tk.TclError:
+        pytest.skip("no display")
+    account = log_in(server, "ola@example.com", PASSWORD, remember=False)
+    app = todo_app.TodoApp(account=account)
+    try:
+        manage_menu = app.nametowidget(app.cget("menu")).winfo_children()
+        states = {
+            menu.entrycget(index, "label"): menu.entrycget(index, "state")
+            for menu in manage_menu
+            for index in range((menu.index("end") or 0) + 1)
+            if menu.type(index) == "command"
+        }
+        assert states["Workflows…"] == states["Tags…"] == "normal"
+        assert states["Users…"] == "disabled"  # Ola is not an administrator
+
+        dialog = todo_app.TagsDialog(app, app._management())
+        dialog.manage.add_tag("server tag")
+        dialog.reload()
+        names = [dialog.tags.item(iid, "values")[0] for iid in dialog.tags.get_children()]
+        assert "server tag" in names
+        dialog.destroy()
+        dialog = todo_app.WorkflowsDialog(app, app._management())
+        workflow = dialog.manage.add_workflow("Garden")
+        dialog.reload(workflow.id)
+        assert dialog.workflows.selection() == (str(workflow.id),)
+        assert len(dialog.stages.get_children()) == 2
+        dialog.destroy()
+    finally:
+        app.destroy()
+
+
+def test_history_of_several_tasks_comes_from_the_server(server: str) -> None:
+    account = log_in(server, "ola@example.com", PASSWORD, remember=False)
+    service = RemoteTaskService(account)
+    first = service.create_task("One", stage_id(account, "Software", "Review"), 0)
+    second = service.create_task("Two", stage_id(account, "Software", "Review"), 0)
+    third = service.create_task("Three", stage_id(account, "Software", "Review"), 0)
+    changes = service.get_histories([first.id, second.id])
+    assert {change.task_id for change in changes} == {first.id, second.id}
+    assert third.id not in {change.task_id for change in changes}
+    assert all(change.change_type is ChangeType.Created for change in changes)
+
+
+def test_older_server_is_asked_for_the_tasks_one_by_one(
+    server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account = log_in(server, "ola@example.com", PASSWORD, remember=False)
+    service = RemoteTaskService(account)
+    first = service.create_task("One", stage_id(account, "Software", "Review"), 0)
+    second = service.create_task("Two", stage_id(account, "Software", "Review"), 0)
+    request = account.api.request
+
+    def older_server(method: str, path: str, body: object = None) -> object:
+        if path == "/tasks/history":
+            error = RemoteError("Method Not Allowed")
+            error.status = 405  # what such a server really answers
+            raise error
+        return request(method, path, body)
+
+    monkeypatch.setattr(account.api, "request", older_server)
+    changes = service.get_histories([second.id, first.id])
+    assert [change.task_id for change in changes] == [first.id, second.id]  # oldest first
+
+
+def test_out_of_reach_server_leaves_the_shared_history_empty(
+    server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account = log_in(server, "ola@example.com", PASSWORD, remember=False)
+
+    def unreachable(*_args: object) -> None:
+        raise RemoteError("Cannot reach the server")
+
+    monkeypatch.setattr(account.api, "request", unreachable)
+    assert RemoteTaskService(account).get_histories([1]) == []

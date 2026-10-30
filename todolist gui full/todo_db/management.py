@@ -8,6 +8,9 @@ message for the user, already translated.
 
 from __future__ import annotations
 
+import functools
+from typing import Any
+
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -248,3 +251,17 @@ def check_delete_tag(session: Session, tag_id: int) -> Tag:
 def delete_tag(session: Session, tag_id: int) -> None:
     session.delete(check_delete_tag(session, tag_id))
     _commit(session, tr("Could not delete the tag."))
+
+
+class LocalManagement:
+    """These functions on one local database, without passing the session each time.
+
+    The desktop windows use it the same way as remote.RemoteManagement, which
+    makes the changes on the server: manage.add_tag(name), manage.session...
+    """
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def __getattr__(self, name: str) -> Any:
+        return functools.partial(globals()[name], self.session)

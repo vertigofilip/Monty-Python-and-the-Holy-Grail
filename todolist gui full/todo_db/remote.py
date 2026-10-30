@@ -35,7 +35,9 @@ from .models import (
     User,
     Workflow,
 )
+from . import management
 from .i18n import tr
+from .management import ManagementError
 from .services import TaskService
 
 # Where a remembered login is kept: readable only by the owner, never in git.
@@ -45,6 +47,8 @@ TIMEOUT = 10.0
 
 class RemoteError(ValueError):
     """The server refused a request or could not be reached (message for the user)."""
+
+    status: int | None = None  # the HTTP status, if the server answered
 
 
 class NotLoggedIn(RemoteError):
@@ -74,7 +78,9 @@ class ApiClient:
         if response.status_code == 401 and self.token:
             raise NotLoggedIn(tr("Login expired. Please log in again."))
         if response.is_error:
-            raise RemoteError(_error_message(response))
+            error = RemoteError(_error_message(response))
+            error.status = response.status_code
+            raise error
         return response.json() if response.content else None
 
     def login(self, email: str, password: str) -> dict[str, Any]:
@@ -237,21 +243,39 @@ class RemoteTaskService:
 
     def get_history(self, task_id: int) -> list[TaskChange]:
         """The task's history from the server, as (unsaved) TaskChange objects."""
-        return [
-            TaskChange(
-                id=row["id"],
-                task_id=row["task_id"],
-                changed_at=_when(row["changed_at"]),
-                changed_by_id=row["changed_by_id"],
-                changed_by=User(id=row["changed_by_id"], name=row["changed_by"])
-                if row["changed_by"] else None,
-                change_type=ChangeType[row["change_type"]],
-                field_name=row["field_name"],
-                old_value=row["old_value"],
-                new_value=row["new_value"],
-            )
-            for row in self._api.request("GET", f"/tasks/{task_id}/history")
-        ]
+        return [self._change(row) for row in self._api.request("GET", f"/tasks/{task_id}/history")]
+
+    def get_histories(self, task_ids: list[int]) -> list[TaskChange]:
+        """The changes of all these tasks together, oldest first.
+
+        A server older than 1.4 does not know this request (404, or 405 because the
+        path looks like /tasks/{id}): the tasks are then asked for one by one.
+        """
+        try:
+            rows = self._api.request("POST", "/tasks/history", {"task_ids": task_ids})
+        except NotLoggedIn:
+            raise
+        except RemoteError as error:
+            if error.status not in (404, 405):
+                return []  # out of reach for now: the list is only informative
+            changes = [change for task_id in task_ids for change in self.get_history(task_id)]
+            return sorted(changes, key=lambda change: (change.changed_at, change.id))
+        return [self._change(row) for row in rows]
+
+    @staticmethod
+    def _change(row: dict[str, Any]) -> TaskChange:
+        return TaskChange(
+            id=row["id"],
+            task_id=row["task_id"],
+            changed_at=_when(row["changed_at"]),
+            changed_by_id=row["changed_by_id"],
+            changed_by=User(id=row["changed_by_id"], name=row["changed_by"])
+            if row["changed_by"] else None,
+            change_type=ChangeType[row["change_type"]],
+            field_name=row["field_name"],
+            old_value=row["old_value"],
+            new_value=row["new_value"],
+        )
 
     def get_progress_percent(self, task_id: int) -> float:
         """Calculated from the mirror, exactly as the server would."""
@@ -304,6 +328,88 @@ class RemoteAccount:
         self.api.logout()
         forget_login()
         self.api.close()
+
+
+class RemoteManagement:
+    """What management.LocalManagement does, on the server: workflows, stages and tags.
+
+    Reads, and the checks before a delete, use the mirror. Every change is sent
+    to the server and the mirror is then downloaded again, so the changed item
+    is returned from the fresh copy. Refused changes raise ManagementError.
+    """
+
+    def __init__(self, account: RemoteAccount) -> None:
+        self.account = account
+
+    @property
+    def session(self) -> Session:
+        return self.account.mirror.session
+
+    def _send(self, method: str, path: str, body: Any = None) -> Any:
+        try:
+            data = self.account.api.request(method, path, body)
+            self.account.mirror.sync()
+        except RemoteError as error:
+            raise ManagementError(str(error)) from error
+        return data
+
+    # -- workflows and stages -------------------------------------------------------
+
+    def add_workflow(self, name: str) -> Workflow | None:
+        data = self._send("POST", "/workflows", {"name": name})
+        return self.session.get(Workflow, data["id"])
+
+    def rename_workflow(self, workflow_id: int, name: str) -> Workflow | None:
+        self._send("PATCH", f"/workflows/{workflow_id}", {"name": name})
+        return self.session.get(Workflow, workflow_id)
+
+    def check_delete_workflow(self, workflow_id: int) -> Workflow:
+        return management.check_delete_workflow(self.session, workflow_id)
+
+    def delete_workflow(self, workflow_id: int) -> None:
+        self._send("DELETE", f"/workflows/{workflow_id}")
+
+    def add_stage(self, workflow_id: int, name: str) -> Stage | None:
+        data = self._send("POST", f"/workflows/{workflow_id}/stages", {"name": name})
+        added = max(data["stages"], key=lambda stage: stage["order"])  # it goes at the end
+        return self.session.get(Stage, added["id"])
+
+    def rename_stage(self, stage_id: int, name: str) -> Stage | None:
+        self._send("PATCH", f"/stages/{stage_id}", {"name": name})
+        return self.session.get(Stage, stage_id)
+
+    def shift_stage(self, stage_id: int, delta: int) -> Stage | None:
+        self._send("POST", f"/stages/{stage_id}/move", {"delta": delta})
+        return self.session.get(Stage, stage_id)
+
+    def set_stage_final(self, stage_id: int, is_final: bool) -> Stage | None:
+        self._send("PATCH", f"/stages/{stage_id}", {"is_final": is_final})
+        return self.session.get(Stage, stage_id)
+
+    def check_delete_stage(self, stage_id: int) -> Stage:
+        return management.check_delete_stage(self.session, stage_id)
+
+    def delete_stage(self, stage_id: int) -> None:
+        self._send("DELETE", f"/stages/{stage_id}")
+
+    # -- tags --------------------------------------------------------------------------
+
+    def tag_usage(self) -> list[tuple[Tag, int]]:
+        return management.tag_usage(self.session)
+
+    def add_tag(self, name: str) -> Tag | None:
+        data = self._send("POST", "/tags", {"name": name})
+        return self.session.get(Tag, data["id"])
+
+    def rename_tag(self, tag_id: int, name: str) -> Tag | None:
+        self._send("PATCH", f"/tags/{tag_id}", {"name": name})
+        return self.session.get(Tag, tag_id)
+
+    def check_delete_tag(self, tag_id: int) -> Tag:
+        return management.check_delete_tag(self.session, tag_id)
+
+    def delete_tag(self, tag_id: int) -> None:
+        self._send("DELETE", f"/tags/{tag_id}")
 
 
 # -- remembered login ------------------------------------------------------------------

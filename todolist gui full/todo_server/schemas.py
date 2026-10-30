@@ -97,6 +97,27 @@ class TagOut(BaseModel):
     name: str
 
 
+class TagUsageOut(TagOut):
+    tasks: int  # how many tasks have the tag
+
+
+class NameIn(BaseModel):
+    """A new workflow, stage or tag, or a new name for one."""
+
+    name: Name
+
+
+class StageUpdate(BaseModel):
+    """Only the fields sent are changed."""
+
+    name: Name | None = None
+    is_final: bool | None = None
+
+
+class StageMove(BaseModel):
+    delta: Literal[-1, 1]  # up or down
+
+
 class RepeatRuleOut(BaseModel):
     id: int
     name: str
@@ -199,6 +220,10 @@ class TaskOut(BaseModel):
     location: str | None = None
     tags: list[TagOut]
     progress_percent: float
+
+
+class HistoryQuery(BaseModel):
+    task_ids: list[int]
 
 
 class ChangeOut(BaseModel):

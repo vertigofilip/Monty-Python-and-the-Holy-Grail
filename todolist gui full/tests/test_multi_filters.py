@@ -99,7 +99,7 @@ def matching_stages(window: object) -> set[str]:
     def walk(parent: str) -> None:
         for iid in tree.get_children(parent):
             if "context" not in tree.item(iid, "tags"):
-                stages.add(tree.set(iid, "Stage"))
+                stages.add(tree.item(iid, "text"))  # the stage is in the tree column
             walk(iid)
 
     walk("")

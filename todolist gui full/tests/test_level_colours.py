@@ -152,3 +152,23 @@ def test_desktop_shows_tasks_due_today_in_green(window: TodoApp) -> None:
     assert "today" not in tags[tomorrow.id] and "overdue" not in tags[tomorrow.id]
     assert "done" in tags[done.id] and "today" not in tags[done.id]
     assert str(window.tree.tag_configure("today", "foreground")) == DUE_TODAY_COLOUR
+
+
+def test_task_list_columns_are_in_order(window: TodoApp) -> None:
+    """Stage first (in the tree column), then the name, progress, repeat... tags last."""
+    from todo_db.app import LIST_COLUMNS
+
+    assert LIST_COLUMNS == ("Stage", "Task", "Progress", "Repeat", "Due date", "Priority",
+                            "Urgency", "Assignee", "Location", "Tags")
+    window.update()
+    assert window.tree.heading("#0", "text").startswith("Stage")
+    assert window.tree["columns"] == LIST_COLUMNS[1:]
+    # The filters sit over their own columns, from left to right.
+    lefts = [window._filter_widgets[field].winfo_x() for field in LIST_COLUMNS]
+    assert lefts == sorted(lefts)
+
+    parent = next(t for t in window.session.scalars(select(Task)) if t.subtasks)
+    child = parent.subtasks[0]
+    assert window.tree.item(str(parent.id), "text") == parent.stage.name
+    assert window.tree.set(str(child.id), "Task") == "    " + child.name  # indented
+    assert window.tree.set(str(parent.id), "Progress").endswith("%")

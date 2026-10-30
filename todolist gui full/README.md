@@ -83,8 +83,8 @@ Administrators also get the **Server** menu: **Server → Server settings…**
 switches automatic history compression on or off and sets after how many days
 history is compressed. For other users, and in local mode, the whole menu is
 greyed out (the server refuses non-administrators anyway).
-**Workflows and tags cannot be changed in server mode** (the server has no
-API for that yet); those menu items are greyed out.
+**Manage → Workflows…** and **Manage → Tags…** work in server mode too, for
+every logged-in user: the changes are made on the server, so everyone sees them.
 
 ## Executables (no Python needed)
 
@@ -95,7 +95,7 @@ server with PyInstaller (in its own environment, `build/venv-<system>`):
 |---|---|---|
 | Linux | `python3 build_desktop.py` | `dist/linux/todolist`, `dist/linux/todolist-server` |
 | Windows | `py build_desktop.py` | `dist\windows\todolist.exe`, `dist\windows\todolist-server.exe` |
-| Android | `./build_android.sh` | `android/bin/todolist-1.2-*-debug.apk` |
+| Android | `./build_android.sh` | `android/bin/todolist-1.5-*-debug.apk` |
 | Debian/Ubuntu/Mint | `./build_deb.sh` | `dist/todolist_<version>_amd64.deb` (both programs; `sudo apt install ./dist/todolist_*.deb`) |
 
 PyInstaller builds only for the system it runs on. Without a Windows
@@ -250,7 +250,7 @@ builds in `~/Android/todolist-build` – it takes a while, later builds take a
 minute or two):
 
 ```bash
-./build_android.sh              # -> android/bin/todolist-1.2-*-debug.apk
+./build_android.sh              # -> android/bin/todolist-1.5-*-debug.apk
 ./build_android.sh deploy       # build and install on a USB-connected phone
 ```
 
@@ -295,8 +295,10 @@ file: `--db`, see "Where the databases are"). The file is
 created on first start with the sample users, workflows, repeat rules and tags
 but no tasks.
 
-- The task tree shows stage, due date, priority, urgency, assignee, location, tags, progress
-  and repeat. Location is free text ("Gym", "Office, room 12"), set in the task form.
+- The task tree shows, from left to right: stage, task name, progress, repeat, due date,
+  priority, urgency, assignee, location and tags. The stage is in the first column, which
+  also holds the ▸/▾ arrows that open and close subtasks; subtask names are indented
+  under their parent. Location is free text ("Gym", "Office, room 12"), set in the task form.
   Unfinished tasks past their due date are shown in red.
 - **New task / New subtask / Edit** open a form; double-click or Enter edits.
   A new task is assigned to the person adding it ("Acting as", or the logged-in
@@ -305,7 +307,16 @@ but no tasks.
   (repeating tasks come back at midnight after their interval, see below).
 - **Up / Down / Indent / Outdent** reorder and re-parent; **Delete** removes a
   task without subtasks.
-- The bottom panel shows the selected task's description and history.
+- Clicking the selected task, the empty space below the tasks, **Unselect task** or
+  Escape unselects it.
+- The bottom panel shows the selected task's description and history; with no task
+  selected, the history of all the tasks in the list (so the task filters narrow it
+  down too). The history has its own filters above its headings: drop-downs where
+  several choices can be ticked for when (today, last 7 or 30 days, older), who, kind
+  of change and field, and "contains" text boxes for the task, old and new value. They stay set when another
+  task is selected; **Clear history filters** resets them. **Sort history…** opens
+  the same window as Sort…, over the history's columns; the order is remembered and
+  shown with ▲/▼ in the headings (without one: oldest first).
 - **Acting as** (top right) is the user recorded in the history; new tasks are
   created by that user.
 - **Filters:** the row under the column headings filters the list by every
@@ -669,8 +680,10 @@ travel unencrypted.
 | --- | --- |
 | Everyone | `POST /auth/login` |
 | Logged in | `GET /auth/me`, `POST /auth/logout`, `GET /users`, `GET /workflows`, `GET /tags`, `GET /repeat-rules` |
-| Logged in | `GET/POST /tasks`, `GET/PATCH/DELETE /tasks/{id}`, `POST /tasks/{id}/move`, `GET /tasks/{id}/history` |
+| Logged in | `GET/POST /tasks`, `GET/PATCH/DELETE /tasks/{id}`, `POST /tasks/{id}/move`, `GET /tasks/{id}/history`, `POST /tasks/history` (`task_ids`) |
 | Logged in | `GET/POST /subtask-templates`, `PATCH/DELETE /subtask-templates/{id}` |
+| Logged in | `POST /workflows`, `PATCH/DELETE /workflows/{id}`, `POST /workflows/{id}/stages`, `PATCH/DELETE /stages/{id}` (`name`, `is_final`), `POST /stages/{id}/move` (`delta` −1 or 1) |
+| Logged in | `GET /tags/usage`, `POST /tags`, `PATCH/DELETE /tags/{id}` |
 | Admin | `GET/POST /admin/users`, `PATCH /admin/users/{id}` |
 | Admin | `GET/PUT /admin/settings`, `POST /admin/history/compress`, `POST /admin/tasks/{id}/history/compress`, `POST /admin/maintenance/run` |
 | Admin | `GET /admin/database`, `POST /admin/database/backup`, `GET /admin/database/backups`, `GET /admin/database/backups/{name}`, `POST /admin/database/vacuum` |
@@ -718,8 +731,3 @@ entry, active logins, the settings and the last maintenance run.
 (into `backups/` next to the database); backups can be listed and downloaded.
 Restoring is manual: stop the server and replace the database file with a
 backup.
-
-### Not done yet
-
-- Workflows, stages and tags can be read through the API but not changed; that
-  is still done in the desktop program (or would need more endpoints).
