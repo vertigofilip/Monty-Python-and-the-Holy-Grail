@@ -45,6 +45,7 @@ def find_due_tasks(private: Path) -> Callable[[date], list[DueTask]]:
     """find_due(today) for the mode the app is in: the phone's database, or the server."""
 
     def find_due(today: date) -> list[DueTask]:
+        """The tasks to remind of, from the phone's database or the server."""
         i18n.set_language(i18n.load_language())  # the app's language may have changed
         if settings.load_setting("mode") == "local":
             from todo_mobile.local import LocalApi  # SQLAlchemy only when needed
@@ -60,6 +61,7 @@ def find_due_tasks(private: Path) -> Callable[[date], list[DueTask]]:
         server = remote.Api(*login)
 
         def fetch() -> dict[str, Any]:
+            """Who is logged in and their unfinished tasks."""
             user = server.request("GET", "/auth/me")
             return {"user_id": user["id"], "tasks": server.request("GET", "/tasks?done=false")}
 
@@ -77,7 +79,7 @@ def notification_text(due: list[DueTask], today: date) -> tuple[str, str, str]:
     lines = []
     for task in due[:MAX_LINES]:
         line = task.name
-        if task.due_date < today:
+        if task.due_date and task.due_date < today:
             line += " " + tr("(overdue since {date})").format(date=task.due_date.isoformat())
         lines.append(line)
     if len(due) > MAX_LINES:
@@ -103,9 +105,11 @@ class AndroidNotification:
         self.manager.createNotificationChannel(channel)
 
     def _text(self, text: str) -> Any:
+        """A Java text, as Android's calls want."""
         return self._autoclass("java.lang.String")(text)
 
     def _showing(self) -> bool:
+        """Whether the reminder is still in the notification list."""
         return any(n.getId() == NOTIFICATION_ID for n in self.manager.getActiveNotifications())
 
     def __call__(self, due: list[DueTask], popup: bool) -> None:

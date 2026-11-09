@@ -58,6 +58,7 @@ class LoginLimiter:
         self._failures: dict[str, deque[float]] = {}
 
     def _recent(self, key: str) -> deque[float]:
+        """The failures of this key still within the time window."""
         failures = self._failures.setdefault(key, deque())
         while failures and failures[0] < time.monotonic() - self.window:
             failures.popleft()

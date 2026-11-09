@@ -33,6 +33,7 @@ def _commit(session: Session, error: str) -> None:
 
 
 def _get(session: Session, model: type, item_id: int) -> object:
+    """The item with this id, or ManagementError if there is none."""
     item = session.get(model, item_id)
     if item is None:
         raise ManagementError(f"{model.__name__} {item_id} does not exist")
@@ -40,6 +41,7 @@ def _get(session: Session, model: type, item_id: int) -> object:
 
 
 def _in_use(name: str, used: int) -> ManagementError:
+    """The error saying that tasks still use this item."""
     return ManagementError(
         tr('"{name}" is used by {used} task(s) and cannot be deleted.').format(name=name, used=used)
     )
@@ -49,6 +51,7 @@ def _in_use(name: str, used: int) -> ManagementError:
 
 
 def _user_fields(name: str, email: str | None) -> tuple[str, str | None]:
+    """A user's name and email, cleaned up; refuses an empty name."""
     name = name.strip()
     if not name:
         raise ManagementError(tr("The user needs a name."))
@@ -56,6 +59,7 @@ def _user_fields(name: str, email: str | None) -> tuple[str, str | None]:
 
 
 def add_user(session: Session, name: str, email: str | None = None) -> User:
+    """A new user; refused if the email is taken."""
     name, email = _user_fields(name, email)
     user = User(name=name, email=email)
     session.add(user)
@@ -64,6 +68,7 @@ def add_user(session: Session, name: str, email: str | None = None) -> User:
 
 
 def update_user(session: Session, user_id: int, name: str, email: str | None) -> User:
+    """Change a user's name and email; refused if the email is taken."""
     user = _get(session, User, user_id)
     user.name, user.email = _user_fields(name, email)  # type: ignore[attr-defined]
     _commit(session, tr("Could not save. Another user already has this email."))
@@ -107,6 +112,7 @@ def _reorder(session: Session, stages: list[Stage]) -> None:
 
 
 def _name(name: str) -> str:
+    """A name without surrounding spaces; refuses an empty one."""
     name = name.strip()
     if not name:
         raise ManagementError(tr("Enter a name."))
@@ -125,6 +131,7 @@ def add_workflow(session: Session, name: str) -> Workflow:
 
 
 def rename_workflow(session: Session, workflow_id: int, name: str) -> Workflow:
+    """Give a workflow a new, unused name."""
     workflow: Workflow = _get(session, Workflow, workflow_id)  # type: ignore[assignment]
     workflow.name = _name(name)
     _commit(session, tr("A workflow with this name already exists."))
@@ -162,6 +169,7 @@ def add_stage(session: Session, workflow_id: int, name: str) -> Stage:
 
 
 def rename_stage(session: Session, stage_id: int, name: str) -> Stage:
+    """Give a stage a new name."""
     stage: Stage = _get(session, Stage, stage_id)  # type: ignore[assignment]
     stage.name = _name(name)
     _commit(session, tr("Could not rename the stage."))
@@ -225,6 +233,7 @@ def tag_usage(session: Session) -> list[tuple[Tag, int]]:
 
 
 def add_tag(session: Session, name: str) -> Tag:
+    """A new tag; refused if the name is taken."""
     tag = Tag(name=_name(name))
     session.add(tag)
     _commit(session, tr("A tag with this name already exists."))
@@ -249,6 +258,7 @@ def check_delete_tag(session: Session, tag_id: int) -> Tag:
 
 
 def delete_tag(session: Session, tag_id: int) -> None:
+    """Delete a tag, if no task uses it."""
     session.delete(check_delete_tag(session, tag_id))
     _commit(session, tr("Could not delete the tag."))
 

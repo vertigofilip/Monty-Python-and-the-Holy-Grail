@@ -104,6 +104,7 @@ def _error_message(code: int, content: bytes) -> str:
 
 
 def save_login(path: Path, base_url: str, token: str) -> None:
+    """Remember the login in a file only the app can read."""
     path.write_text(json.dumps({"server_url": base_url, "token": token}), encoding="utf-8")
     path.chmod(0o600)
 
@@ -118,4 +119,5 @@ def load_login(path: Path) -> tuple[str, str] | None:
 
 
 def forget_login(path: Path) -> None:
+    """Delete the remembered login."""
     path.unlink(missing_ok=True)

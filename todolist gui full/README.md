@@ -3,9 +3,152 @@
 Database layer for a to-do list application: SQLite + SQLAlchemy 2.0, with a
 full change history for every task.
 
+## Getting started
+
+There are two ways to use the to-do list. Pick one:
+
+| | Just the client | Server and clients |
+| --- | --- | --- |
+| Where the tasks are | A file on each computer or phone | On one server, shared |
+| Who sees them | Only that device | Everyone with an account, on any device |
+| Accounts | None ("Acting as" picks a name) | Email and password for each person |
+| Needs | Nothing else | A computer that stays on, reachable by the others |
+
+You can start with just the client and set up a server later. The two keep
+separate tasks, though: nothing is copied from a local file to the server.
+
+### Option A: just the client
+
+**1. Install the desktop program**, whichever way suits the computer:
+
+| System | How |
+| --- | --- |
+| Debian, Ubuntu, Mint | `sudo apt install ./dist/todolist_<version>_amd64.deb`, then open "To-do list" from the menu |
+| Windows | Download `todolist.exe` from the GitHub Actions artifact `todolist-windows` (see "Executables") and run it |
+| NixOS | Add the `client` package (see "NixOS"), then open "To-do list" from the menu |
+| Any system with Python 3.11+ | `./run_client.sh` in this folder; it sets up everything on first use |
+
+To make the `.deb` yourself, run `./build_deb.sh` (see "Executables").
+
+**2. Choose where the tasks are.** On first start the program asks. Pick
+**On this computer**. The tasks go in `todo.db`, or in another file you
+choose with **Browse…**.
+
+**3. Add tasks.** The file starts with sample users, workflows and tags but no
+tasks. Choose your name in **Acting as** (top right), and add more people with
+**Manage → Users…**.
+
+**On a phone** (optional), with no server:
+1. Copy `android/bin/todolist-<version>-*-debug.apk` to the phone, open it and
+   allow installing from this source. Or build it with `./build_android.sh`.
+2. Tap **Without a server** under the login.
+
+The phone keeps its own tasks, separate from the computer's: nothing is synchronised.
+
+### Option B: a server and clients
+
+Set up the server once, then connect each computer and phone to it.
+
+**1. Start the server** on the computer that will hold the tasks. It needs to
+stay on while people use the list. Use one of these:
+
+- **NixOS** (recommended, runs as a service): enable `services.todolist-server`
+  with `openFirewall = true` (see "NixOS"), then run `sudo nixos-rebuild switch`.
+  It starts at boot and restarts by itself if it fails.
+- **From this folder**, with Python: `./run_server.sh`. It listens on the
+  network and prints the address others should type in.
+- **From the `.deb`**: make a folder for the data, then start the server there:
+
+  ```bash
+  mkdir -p ~/todolist-server && cd ~/todolist-server
+  todolist-server run --host 0.0.0.0     # without --host, only this computer can connect
+  ```
+
+  The database `todo_server.db` and `backups/` go in that folder. The `.deb`
+  does not start the server at boot. To keep it running after you log out,
+  use a systemd service (sketched under "Keeping the server running" below).
+
+**2. Create the first administrator** (it asks for a password twice, at least
+8 characters):
+
+```bash
+# NixOS:
+sudo todolist-server-admin create-admin --name "Anna Kowalska" --email anna@example.com
+# From this folder:
+./run_server.sh create-admin --name "Anna Kowalska" --email anna@example.com
+# From the .deb, in the server's folder:
+todolist-server create-admin --name "Anna Kowalska" --email anna@example.com
+```
+
+**3. Let the other devices reach it.**
+- **Address:** `./run_server.sh` prints it. Otherwise `hostname -I` shows this
+  computer's address. Others type `http://<address>:8000`, e.g.
+  `http://192.168.1.10:8000`.
+- **Firewall:** if they cannot connect, open the port. On Ubuntu:
+  `sudo ufw allow 8000/tcp`. On NixOS, `openFirewall = true` does it.
+- **Over the internet:** put the server behind HTTPS (see
+  "Application server"), or passwords travel unencrypted.
+
+**4. Connect the desktop program** on each computer. Install it as in
+Option A, step 1, then on first start pick **On a server**:
+1. Enter the server address, your email and your password.
+2. Tick **Remember me on this computer** to stay logged in.
+
+On a computer that already works locally, use **Account → Log in to a server…**.
+
+**5. Add the other people.** Log in as the administrator, then open
+**Manage → Users…** to give each person an account with an email and
+password. Everyone else logs in with their own account. The history records
+who changed what.
+
+**6. Connect phones** (optional):
+1. Install the APK as in Option A.
+2. On the login screen, enter the server address, email and password.
+3. Tick "Remember me on this phone".
+
+Reminders then come from the server's tasks, even with the app closed.
+
+**Updating:** install the new client on each device the same way. Update the
+server too, so new features that need it work (on NixOS see "Updating" under
+"NixOS"). The server's tasks are kept and its database is upgraded when it
+starts.
+
+### Keeping the server running
+
+With the `.deb`, a systemd service starts the server at boot. Save this as
+`/etc/systemd/system/todolist-server.service`, changing `User` and the folder
+to yours:
+
+```ini
+[Unit]
+Description=To-do list server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=anna
+WorkingDirectory=/home/anna/todolist-server
+ExecStart=/usr/bin/todolist-server run --host 0.0.0.0 --port 8000
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then start it, now and at every boot, and check that it runs:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now todolist-server
+systemctl status todolist-server        # its log: journalctl -u todolist-server
+```
+
+Run `create-admin` in that same folder as that same user, so it uses the
+service's database.
+
 ## Setup
 
-Requires Python 3.11+.
+For working on the code. Requires Python 3.11+.
 
 ```bash
 python3 -m venv .venv
@@ -95,7 +238,7 @@ server with PyInstaller (in its own environment, `build/venv-<system>`):
 |---|---|---|
 | Linux | `python3 build_desktop.py` | `dist/linux/todolist`, `dist/linux/todolist-server` |
 | Windows | `py build_desktop.py` | `dist\windows\todolist.exe`, `dist\windows\todolist-server.exe` |
-| Android | `./build_android.sh` | `android/bin/todolist-1.5-*-debug.apk` |
+| Android | `./build_android.sh` | `android/bin/todolist-1.6-*-debug.apk` |
 | Debian/Ubuntu/Mint | `./build_deb.sh` | `dist/todolist_<version>_amd64.deb` (both programs; `sudo apt install ./dist/todolist_*.deb`) |
 
 PyInstaller builds only for the system it runs on. Without a Windows
@@ -218,7 +361,8 @@ server, or without one on the phone's own database:
   Delete. **New task** at the bottom of the list; it is assigned to you.
 - **Menu** – who is logged in, language (English / Polski), **Reminders on**,
   Log out.
-- **Reminders** – unfinished tasks due today or overdue, with the same rules as
+- **Reminders** – unfinished tasks due today or overdue, and important or urgent
+  ones whatever their due date, with the same rules as
   the desktop program (`todo_db/reminder_core.py`): when a task becomes due,
   and again every 60 minutes while it is (`reminder_check_minutes`,
   `reminder_repeat_minutes`, `reminder_only_mine` in the app's settings). On
@@ -250,7 +394,7 @@ builds in `~/Android/todolist-build` – it takes a while, later builds take a
 minute or two):
 
 ```bash
-./build_android.sh              # -> android/bin/todolist-1.5-*-debug.apk
+./build_android.sh              # -> android/bin/todolist-1.6-*-debug.apk
 ./build_android.sh deploy       # build and install on a USB-connected phone
 ```
 
@@ -398,8 +542,9 @@ Every change goes through `TaskService`, so the history is always written.
 A task can have a **due date** (the "Due date" field in the task form, typed
 as `YYYY-MM-DD` or picked with the 📅 button from a calendar, which starts on
 Monday and has "Today" and "No date"; empty = no deadline). While the program is open, a background
-thread looks every 15 minutes for unfinished tasks due today or earlier. When
-one is newly due, or an hour has passed since the last reminder, a window
+thread looks every 15 minutes for unfinished tasks due today or earlier, and for
+unfinished tasks of Important priority or High urgency (or both), with any due
+date or none. When one is newly due, or an hour has passed since the last reminder, a window
 "Task reminder" ("Przypomnienie o zadaniu") appears above other programs: an
 orange background, large text, and every due task one under another (overdue
 ones with their date). It stays until you close it and keeps its list up to
@@ -496,6 +641,10 @@ language, add it to `LANGUAGES` and add its dictionary to `_TRANSLATIONS`;
 `tests/test_i18n.py` checks that no interface text is left untranslated.
 
 ## Layout
+
+Diagrams of how the code fits together are in [docs/CODE_MAP.md](docs/CODE_MAP.md); every
+file and function, with what it does, is in [docs/FUNCTIONS.md](docs/FUNCTIONS.md) (made by
+`python docs/make_function_list.py`; run it again after changing the code).
 
 | File | Contents |
 | --- | --- |

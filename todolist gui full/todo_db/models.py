@@ -68,11 +68,13 @@ class UtcDateTime(TypeDecorator[datetime]):
     cache_ok = True
 
     def process_bind_param(self, value: datetime | None, dialect: Any) -> datetime | None:
+        """Going into the database: UTC, without the time zone."""
         if value is None:
             return None
         return value.astimezone(timezone.utc).replace(tzinfo=None)
 
     def process_result_value(self, value: datetime | None, dialect: Any) -> datetime | None:
+        """Coming out of the database: mark it as UTC again."""
         if value is None:
             return None
         return value.replace(tzinfo=timezone.utc)
@@ -89,9 +91,11 @@ class IntEnumType(TypeDecorator[enum.IntEnum]):
         self.enum_class = enum_class
 
     def process_bind_param(self, value: enum.IntEnum | None, dialect: Any) -> int | None:
+        """Going into the database: the level's number."""
         return None if value is None else int(self.enum_class(value))
 
     def process_result_value(self, value: int | None, dialect: Any) -> enum.IntEnum | None:
+        """Coming out of the database: the level for the number."""
         return None if value is None else self.enum_class(value)
 
 

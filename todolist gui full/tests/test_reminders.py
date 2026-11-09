@@ -320,3 +320,67 @@ def test_remote_due_tasks_offline(server: str, saved_tasks: Path) -> None:  # no
     finally:
         offline.close()
     assert [task.name for task in found] == ["Mine"]
+
+
+def test_important_or_urgent_tasks_need_a_reminder_whatever_their_date() -> None:
+    later = TODAY + timedelta(days=30)
+    for due in (None, later, TODAY):
+        assert is_due(due, False, TODAY, "Important", "Low")
+        assert is_due(due, False, TODAY, "Maybe", "High")
+        assert is_due(due, False, TODAY, "Important", "High")
+        assert not is_due(due, True, TODAY, "Important", "High")  # done
+    assert not is_due(None, False, TODAY, "Normal", "Medium")
+    assert not is_due(later, False, TODAY, "Maybe", "Low")
+    assert is_due(TODAY, False, TODAY, "Maybe", "Low")  # due: as before
+
+
+def test_server_tasks_without_a_date_come_after_the_due_ones() -> None:
+    from todo_db.reminder_core import due_tasks_in
+
+    def task(id_: int, due: date | None, priority: str, urgency: str) -> dict[str, object]:
+        return {"id": id_, "name": str(id_), "due_date": due.isoformat() if due else None,
+                "done": False, "assignee_id": None, "priority": priority, "urgency": urgency}
+
+    tasks = [task(1, None, "Important", "Low"), task(2, None, "Normal", "Medium"),
+             task(3, TODAY, "Normal", "Medium"), task(4, TODAY + timedelta(days=9), "Normal", "High")]
+    assert [t.id for t in due_tasks_in(tasks, TODAY)] == [3, 4, 1]
+
+
+def test_local_reminders_include_important_and_urgent_tasks(
+    service: TaskService, world: World
+) -> None:
+    from todo_db.models import Priority, Urgency
+
+    session = service.session
+    plain = service.create_task("Plain", world.todo, world.anna)
+    important = service.create_task("Call the bank", world.todo, world.anna,
+                                    priority=Priority.Important)
+    urgent = service.create_task("Fix the leak", world.todo, world.anna, urgency=Urgency.High,
+                                 due_date=TODAY + timedelta(days=5))
+    due = service.create_task("Pay", world.todo, world.anna, due_date=TODAY)
+    service.create_task("Finished", world.done, world.anna, priority=Priority.Important)
+
+    found = local_due_tasks(sessionmaker(session.get_bind()), TODAY)
+    assert [task.id for task in found] == [due.id, urgent.id, important.id]
+    assert plain.id not in [task.id for task in found]
+
+
+def test_reminder_texts_cope_with_a_task_without_a_date() -> None:
+    from todo_mobile.reminder_service import notification_text
+
+    due = [DueTask(1, "Call the bank", None), DueTask(2, "Pay", TODAY - timedelta(days=1))]
+    assert notification_text(due, TODAY)[2].splitlines()[0] == "Call the bank"
+
+
+def test_reminder_window_shows_a_task_without_a_date(tmp_path: Path) -> None:
+    tk = pytest.importorskip("tkinter")
+    from todo_db.app import ReminderWindow
+
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+    window = ReminderWindow(root, "orange", 12)
+    window.show([DueTask(1, "Call the bank", None)])
+    assert [label.cget("text") for label in window._list.winfo_children()] == ["•  Call the bank"]
+    root.destroy()

@@ -71,6 +71,7 @@ def task_rows(
     today = today or date.today()
 
     def matches(task: dict[str, Any]) -> bool:
+        """Whether a task passes all the column filters and the name search."""
         if not all(
             any(filter_matches(column, key, task, today) for key in keys)
             for column, saved in tests.items() if (keys := filter_keys(saved))
@@ -85,6 +86,7 @@ def task_rows(
         return needle in haystack.casefold()
 
     def walk(parent_id: int | None, depth: int) -> list[Row]:
+        """The rows of one level; a parent stays if something under it matches."""
         rows: list[Row] = []
         for task in children.get(parent_id, []):
             below = walk(task["id"], depth + 1)
@@ -140,6 +142,7 @@ def filter_options(column: str, data: dict[str, Any], today: date | None = None
 
 
 def _id(key: str) -> int | None:
+    """The number in an "id:3" filter key, or None."""
     return int(key[3:]) if key.startswith("id:") and key[3:].isdigit() else None
 
 
@@ -180,6 +183,7 @@ def sort_value(data: dict[str, Any]) -> Any:
     rules = {rule["id"]: rule for rule in data.get("repeat_rules", [])}
 
     def value(field_name: str, task: dict[str, Any]) -> Any:
+        """What a task is sorted by for one field; None sorts last."""
         if field_name == "Task":
             return text_sort_key(task["name"])
         if field_name == "Stage":

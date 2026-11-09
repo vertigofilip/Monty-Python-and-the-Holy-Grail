@@ -88,6 +88,7 @@ class ServerConfig:
 
     @property
     def backups(self) -> Path:
+        """Where backups go: backup_dir, or backups/ next to the database."""
         return self.backup_dir or self.db_path.parent / "backups"
 
 
@@ -113,6 +114,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        """Runs the nightly maintenance while the server is up."""
         job = asyncio.create_task(scheduler(session_factory)) if config.run_scheduler else None
         yield
         if job:
@@ -126,12 +128,14 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     # -- dependencies -----------------------------------------------------------
 
     def get_db() -> Iterator[Session]:
+        """A database session for one request."""
         with session_factory() as session:
             yield session
 
     Db = Annotated[Session, Depends(get_db)]
 
     def current_token(db: Db, authorization: Annotated[str | None, Header()] = None) -> ApiToken:
+        """The login belonging to the request's token; 401 if there is none."""
         scheme, _, token = (authorization or "").partition(" ")
         if scheme.lower() != "bearer" or not token:
             raise HTTPException(401, "Not logged in", headers={"WWW-Authenticate": "Bearer"})
@@ -146,9 +150,11 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         return row
 
     def current_user(token: Annotated[ApiToken, Depends(current_token)]) -> User:
+        """The logged-in user."""
         return token.user
 
     def admin_user(user: Annotated[User, Depends(current_user)]) -> User:
+        """The logged-in user, who must be an administrator (else 403)."""
         if user.role is not UserRole.Admin:
             raise HTTPException(403, "Administrators only")
         return user
@@ -159,15 +165,18 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     # -- helpers ----------------------------------------------------------------
 
     def get_task(db: Session, task_id: int) -> Task:
+        """The task with this id, or 404."""
         task = db.get(Task, task_id)
         if task is None:
             raise HTTPException(404, f"Task {task_id} does not exist")
         return task
 
     def task_out(service: TaskService, task: Task) -> TaskOut:
+        """A task as the API sends it."""
         return TaskOut(**task_data(service, task))
 
     def user_out(user: User) -> UserOut:
+        """An account as the API sends it."""
         return UserOut(
             id=user.id, name=user.name, email=user.email, is_active=user.is_active, role=user.role
         )
@@ -217,17 +226,20 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.get("/auth/me")
     def me(user: Me) -> UserOut:
+        """Who is logged in."""
         return user_out(user)
 
     # -- reference data -----------------------------------------------------------
 
     @app.get("/users")
     def list_users(_: Me, db: Db) -> list[PublicUserOut]:
+        """Everyone's name, without email or role."""
         users = db.scalars(select(User).order_by(User.name))
         return [PublicUserOut(**public_user_data(u)) for u in users]
 
     @app.get("/workflows")
     def list_workflows(_: Me, db: Db) -> list[WorkflowOut]:
+        """All workflows with their stages."""
         return [
             WorkflowOut(**workflow_data(workflow))
             for workflow in db.scalars(select(Workflow).order_by(Workflow.name))
@@ -235,10 +247,12 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.get("/tags")
     def list_tags(_: Me, db: Db) -> list[TagOut]:
+        """All tags."""
         return [TagOut(**tag_data(t)) for t in db.scalars(select(Tag).order_by(Tag.name))]
 
     @app.get("/repeat-rules")
     def list_repeat_rules(_: Me, db: Db) -> list[RepeatRuleOut]:
+        """All repeat rules."""
         return [
             RepeatRuleOut(**repeat_rule_data(r))
             for r in db.scalars(select(RepeatRule).order_by(RepeatRule.id))
@@ -247,37 +261,44 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     # -- workflows, stages and tags (shared by everyone; any user may change them) ----
 
     def get_item(db: Session, model: type, item_id: int) -> Any:
+        """The item with this id, or 404."""
         item = db.get(model, item_id)
         if item is None:
             raise HTTPException(404, f"{model.__name__} {item_id} does not exist")
         return item
 
     def workflow_out(workflow: Workflow) -> WorkflowOut:
+        """A workflow as the API sends it."""
         return WorkflowOut(**workflow_data(workflow))
 
     @app.post("/workflows", status_code=201)
     def add_workflow(body: NameIn, _: Me, db: Db) -> WorkflowOut:
+        """A new workflow with "To do" and "Done" stages."""
         return workflow_out(write(lambda: management.add_workflow(db, body.name)))
 
     @app.patch("/workflows/{workflow_id}")
     def rename_workflow(workflow_id: int, body: NameIn, _: Me, db: Db) -> WorkflowOut:
+        """Rename a workflow."""
         get_item(db, Workflow, workflow_id)
         return workflow_out(write(lambda: management.rename_workflow(db, workflow_id, body.name)))
 
     @app.delete("/workflows/{workflow_id}", status_code=204)
     def delete_workflow(workflow_id: int, _: Me, db: Db) -> Response:
+        """Delete a workflow; refused while tasks use it or if it is the last."""
         get_item(db, Workflow, workflow_id)
         write(lambda: management.delete_workflow(db, workflow_id))
         return Response(status_code=204)
 
     @app.post("/workflows/{workflow_id}/stages", status_code=201)
     def add_stage(workflow_id: int, body: NameIn, _: Me, db: Db) -> WorkflowOut:
+        """A new stage at the end of a workflow; returns the workflow."""
         get_item(db, Workflow, workflow_id)
         stage = write(lambda: management.add_stage(db, workflow_id, body.name))
         return workflow_out(stage.workflow)
 
     @app.patch("/stages/{stage_id}")
     def update_stage(stage_id: int, body: StageUpdate, _: Me, db: Db) -> WorkflowOut:
+        """Rename a stage and/or set whether it counts as done."""
         stage: Stage = get_item(db, Stage, stage_id)
         if body.name is not None:
             write(lambda: management.rename_stage(db, stage_id, body.name))
@@ -287,30 +308,36 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.post("/stages/{stage_id}/move")
     def move_stage(stage_id: int, body: StageMove, _: Me, db: Db) -> WorkflowOut:
+        """Move a stage up or down in its workflow."""
         get_item(db, Stage, stage_id)
         return workflow_out(write(lambda: management.shift_stage(db, stage_id, body.delta)).workflow)
 
     @app.delete("/stages/{stage_id}", status_code=204)
     def delete_stage(stage_id: int, _: Me, db: Db) -> Response:
+        """Delete a stage; refused while tasks are in it or if it is the last."""
         get_item(db, Stage, stage_id)
         write(lambda: management.delete_stage(db, stage_id))
         return Response(status_code=204)
 
     @app.get("/tags/usage")
     def tag_usage(_: Me, db: Db) -> list[TagUsageOut]:
+        """Every tag with its number of tasks."""
         return [TagUsageOut(**tag_data(tag), tasks=used) for tag, used in management.tag_usage(db)]
 
     @app.post("/tags", status_code=201)
     def add_tag(body: NameIn, _: Me, db: Db) -> TagOut:
+        """A new tag."""
         return TagOut(**tag_data(write(lambda: management.add_tag(db, body.name))))
 
     @app.patch("/tags/{tag_id}")
     def rename_tag(tag_id: int, body: NameIn, _: Me, db: Db) -> TagOut:
+        """Rename a tag."""
         get_item(db, Tag, tag_id)
         return TagOut(**tag_data(write(lambda: management.rename_tag(db, tag_id, body.name))))
 
     @app.delete("/tags/{tag_id}", status_code=204)
     def delete_tag(tag_id: int, _: Me, db: Db) -> Response:
+        """Delete a tag; refused while tasks use it."""
         get_item(db, Tag, tag_id)
         write(lambda: management.delete_tag(db, tag_id))
         return Response(status_code=204)
@@ -318,17 +345,20 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     # -- subtask templates (shared by everyone; any user may change them) -----------
 
     def get_template(db: Session, template_id: int) -> None:
+        """404 unless the template exists."""
         if db.get(SubtaskTemplate, template_id) is None:
             raise HTTPException(404, f"Template {template_id} does not exist")
 
     @app.get("/subtask-templates")
     def list_templates(_: Me, db: Db) -> list[SubtaskTemplateOut]:
+        """All subtask templates, by name."""
         return [
             SubtaskTemplateOut(**templates.template_data(t)) for t in templates.list_templates(db)
         ]
 
     @app.post("/subtask-templates", status_code=201)
     def add_template(body: SubtaskTemplateIn, _: Me, db: Db) -> SubtaskTemplateOut:
+        """A new subtask template."""
         template = write(lambda: templates.add_template(db, body.model_dump()))
         return SubtaskTemplateOut(**templates.template_data(template))
 
@@ -336,6 +366,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     def update_template(
         template_id: int, body: SubtaskTemplateUpdate, _: Me, db: Db
     ) -> SubtaskTemplateOut:
+        """Change the fields sent of a subtask template."""
         get_template(db, template_id)
         fields = body.model_dump(exclude_unset=True)
         if "name" in fields and fields["name"] is None:
@@ -345,6 +376,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.delete("/subtask-templates/{template_id}", status_code=204)
     def delete_template(template_id: int, _: Me, db: Db) -> Response:
+        """Delete a subtask template; subtasks made from it stay."""
         get_template(db, template_id)
         write(lambda: templates.delete_template(db, template_id))
         return Response(status_code=204)
@@ -367,10 +399,12 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.get("/tasks/{task_id}")
     def read_task(task_id: int, _: Me, db: Db) -> TaskOut:
+        """One task."""
         return task_out(TaskService(db), get_task(db, task_id))
 
     @app.post("/tasks", status_code=201)
     def create_task(body: TaskCreate, user: Me, db: Db) -> TaskOut:
+        """A new task, assigned to whoever adds it unless said otherwise."""
         service = TaskService(db)
         fields = body.model_dump()
         if "assignee_id" not in body.model_fields_set:
@@ -393,6 +427,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.post("/tasks/{task_id}/move")
     def move_task(task_id: int, body: TaskMove, user: Me, db: Db) -> TaskOut:
+        """Give a task another parent and/or place among its siblings."""
         get_task(db, task_id)
         service = TaskService(db)
         task = write(lambda: service.move_task(task_id, body.parent_id, body.order, user.id))
@@ -400,6 +435,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.delete("/tasks/{task_id}", status_code=204)
     def delete_task(task_id: int, user: Me, db: Db) -> Response:
+        """Delete a task without subtasks; its history stays."""
         get_task(db, task_id)
         write(lambda: TaskService(db).delete_task(task_id, user.id))
         return Response(status_code=204)
@@ -417,6 +453,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     # -- administration: users ----------------------------------------------------
 
     def active_admins(db: Session) -> int:
+        """How many active administrators there are."""
         query = select(func.count()).select_from(User).where(
             User.is_active, User.role == UserRole.Admin
         )
@@ -424,10 +461,12 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.get("/admin/users")
     def admin_list_users(_: Admin, db: Db) -> list[UserOut]:
+        """All accounts with email and role."""
         return [user_out(u) for u in db.scalars(select(User).order_by(User.name))]
 
     @app.post("/admin/users", status_code=201)
     def admin_create_user(body: UserCreate, _: Admin, db: Db) -> UserOut:
+        """A new account; its email must be free."""
         user = User(
             name=body.name,
             email=body.email.strip(),
@@ -468,6 +507,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.get("/admin/settings")
     def read_settings(_: Admin, db: Db) -> SettingsIO:
+        """The server's settings."""
         return SettingsIO(**asdict(dbadmin.load_settings(db)))
 
     @app.put("/admin/settings")
@@ -509,19 +549,23 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.get("/admin/database")
     def database_info(_: Admin, db: Db) -> dict[str, Any]:
+        """Size and row counts of the database."""
         return dbadmin.statistics(db, config.db_path)
 
     @app.post("/admin/database/backup", status_code=201)
     def make_backup(_: Admin) -> dict[str, Any]:
+        """A consistent copy of the database, made while the server runs."""
         path = dbadmin.backup(config.db_path, config.backups)
         return {"name": path.name, "size_bytes": path.stat().st_size}
 
     @app.get("/admin/database/backups")
     def backups(_: Admin) -> list[dict[str, Any]]:
+        """The backups kept."""
         return dbadmin.list_backups(config.backups)
 
     @app.get("/admin/database/backups/{name}")
     def download_backup(name: str, _: Admin) -> FileResponse:
+        """Download one backup."""
         path = dbadmin.backup_file(config.backups, name)
         if path is None:
             raise HTTPException(404, "No such backup")

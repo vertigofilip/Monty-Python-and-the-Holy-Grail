@@ -20,6 +20,7 @@ def public_user_data(user: User) -> dict[str, Any]:
 
 
 def workflow_data(workflow: Workflow) -> dict[str, Any]:
+    """A workflow with its stages, as the server sends it."""
     return {
         "id": workflow.id,
         "name": workflow.name,
@@ -31,14 +32,17 @@ def workflow_data(workflow: Workflow) -> dict[str, Any]:
 
 
 def tag_data(tag: Tag) -> dict[str, Any]:
+    """A tag, as the server sends it."""
     return {"id": tag.id, "name": tag.name}
 
 
 def repeat_rule_data(rule: RepeatRule) -> dict[str, Any]:
+    """A repeat rule, as the server sends it."""
     return {"id": rule.id, "name": rule.name, "interval": rule.interval, "unit": rule.unit.value}
 
 
 def task_data(service: TaskService, task: Task) -> dict[str, Any]:
+    """A task with everything the clients show (stage, levels, tags, progress...)."""
     return {
         "id": task.id,
         "name": task.name,
@@ -67,6 +71,7 @@ def task_data(service: TaskService, task: Task) -> dict[str, Any]:
 
 
 def change_data(change: TaskChange) -> dict[str, Any]:
+    """One history entry; `summary` is set only for compressed rows."""
     return {
         "id": change.id,
         "task_id": change.task_id,

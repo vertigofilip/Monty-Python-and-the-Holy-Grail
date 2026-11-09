@@ -1,4 +1,4 @@
-"""Reminders without a user interface: which tasks are due, and when to remind of them.
+"""Reminders without a user interface: which tasks need one, and when to remind of them.
 
 Shared by the desktop program (todo_db.reminders adds its window and system
 notifications) and the phone app's background service
@@ -45,22 +45,34 @@ _offline: set[Path] = set()  # saved copies in use now (logged once, not at ever
 
 @dataclass(frozen=True)
 class DueTask:
-    """An unfinished task whose due date is today or has passed."""
+    """An unfinished task to remind of: due today or earlier, important or urgent."""
 
     id: int
     name: str
-    due_date: date
+    due_date: date | None
 
 
-def is_due(due_date: date | None, done: bool, today: date) -> bool:
-    """Whether a task needs a reminder: not done, due today or earlier."""
-    return not done and due_date is not None and due_date <= today
+def is_due(
+    due_date: date | None, done: bool, today: date, priority: str = "", urgency: str = ""
+) -> bool:
+    """Whether a task needs a reminder: not done, and due today or earlier, or important
+    or urgent (by the level's name) whatever its due date."""
+    if done:
+        return False
+    return priority == "Important" or urgency == "High" or (
+        due_date is not None and due_date <= today
+    )
+
+
+def in_reminder_order(tasks: list[DueTask]) -> list[DueTask]:
+    """Oldest due date first, tasks without one last."""
+    return sorted(tasks, key=lambda task: (task.due_date or date.max, task.id))
 
 
 def due_tasks_in(
     tasks: list[dict[str, Any]], today: date, user_id: int | None = None, only_mine: bool = False
 ) -> list[DueTask]:
-    """The due tasks among tasks as the server sends them (dicts); oldest due first.
+    """The tasks to remind of among tasks as the server sends them (dicts); oldest due first.
 
     only_mine: just those assigned to user_id or to nobody.
     """
@@ -68,9 +80,10 @@ def due_tasks_in(
     for task in tasks:
         due_date = date.fromisoformat(task["due_date"]) if task.get("due_date") else None
         mine = not only_mine or task["assignee_id"] in (None, user_id)
-        if mine and is_due(due_date, task["done"], today):
-            due.append(DueTask(task["id"], task["name"], due_date))  # type: ignore[arg-type]
-    return sorted(due, key=lambda task: (task.due_date, task.id))
+        levels = task.get("priority", ""), task.get("urgency", "")
+        if mine and is_due(due_date, task["done"], today, *levels):
+            due.append(DueTask(task["id"], task["name"], due_date))
+    return in_reminder_order(due)
 
 
 def with_saved_copy(fetch: Callable[[], Any], saved: Path, logged_out: type[Exception]) -> Any:
@@ -213,6 +226,7 @@ class Reminders:
             self._thread.join(timeout=2)
 
     def _run(self) -> None:
+        """The background thread: check, wait for the interval or a wake-up, repeat."""
         log.info(
             "Reminders on: checking every %s, repeating every %s",
             self.check_every, self.repeat_after,

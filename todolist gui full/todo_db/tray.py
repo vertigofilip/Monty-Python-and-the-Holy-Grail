@@ -107,6 +107,7 @@ class Tray:
         return True
 
     def _run(self) -> None:
+        """The icon's own thread; a failure only goes to the log."""
         try:
             self._icon.run()
         except Exception:
@@ -118,6 +119,7 @@ class Tray:
             self._icon.update_menu()
 
     def stop(self) -> None:
+        """Remove the icon and wait briefly for its thread to end."""
         if self._icon is not None:
             try:
                 self._icon.stop()

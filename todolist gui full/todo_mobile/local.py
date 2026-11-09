@@ -43,6 +43,7 @@ def _json(data: Any) -> Any:
 
 
 def _user_data(user: User) -> dict[str, Any]:
+    """A user as the server sends it to administrators."""
     return {"id": user.id, "name": user.name, "email": user.email,
             "is_active": user.is_active, "role": user.role.value}
 
@@ -112,6 +113,10 @@ class LocalApi:
                 raise RemoteError(tr(str(error).strip("'"))) from error
 
     def _answer(self, session: Session, method: str, path: str, body: dict[str, Any]) -> Any:
+        """The answer to one request: the same routes and data as the server's.
+
+        Tasks are answered here; users, workflows, tags and templates in _manage.
+        """
         service = TaskService(session)
         user_id = self.user["id"]
         if (method, path) == ("GET", "/auth/me"):

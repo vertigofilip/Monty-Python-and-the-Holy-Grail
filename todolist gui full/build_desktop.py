@@ -39,6 +39,7 @@ HIDDEN = {
 
 
 def venv_python() -> Path:
+    """The Python program inside the build's virtual environment."""
     return VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
@@ -60,6 +61,7 @@ def ensure_venv() -> None:
 
 
 def build(name: str, script: str, windowed: bool, extra: list[str]) -> Path:
+    """Run PyInstaller for one program and return the executable it made."""
     import PyInstaller.__main__
 
     logo = HERE / "todo_db" / "logo.png"
@@ -102,6 +104,7 @@ def tray_backends() -> list[str]:
 
 
 def main() -> None:
+    """Build both programs (desktop and server) into dist/ and list them."""
     ensure_venv()
     hidden = [arg for module in HIDDEN.get(SYSTEM, []) for arg in ("--hidden-import", module)]
     hidden += tray_backends()

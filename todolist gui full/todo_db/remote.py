@@ -98,6 +98,7 @@ class ApiClient:
         self.token = None
 
     def close(self) -> None:
+        """Close the connection to the server."""
         self._http.close()
 
 
@@ -115,10 +116,12 @@ def _error_message(response: httpx.Response) -> str:
 
 
 def _when(value: str | None) -> datetime | None:
+    """A time as the server sends it, or None."""
     return datetime.fromisoformat(value) if value else None
 
 
 def _day(value: str | None) -> date | None:
+    """A date as the server sends it, or None."""
     return date.fromisoformat(value) if value else None
 
 
@@ -139,6 +142,11 @@ class Mirror:
         self.session = self._build()
 
     def _build(self) -> Session:
+        """Download everything and load it into a new in-memory database.
+
+        The ids stay the server's, and the parents come first (users, workflows,
+        rules, tags), so the tasks can refer to them.
+        """
         users = self.api.request("GET", "/users")
         workflows = self.api.request("GET", "/workflows")
         rules = self.api.request("GET", "/repeat-rules")
@@ -204,9 +212,11 @@ class RemoteTaskService:
 
     @property
     def _api(self) -> ApiClient:
+        """The connection of the logged-in account."""
         return self.account.api
 
     def _after_change(self, task_id: int | None) -> Task | None:
+        """Download the changes; the changed task from the new copy."""
         self.account.mirror.sync()
         return self.account.mirror.session.get(Task, task_id) if task_id else None
 
@@ -222,6 +232,7 @@ class RemoteTaskService:
         return self._after_change(created["id"])
 
     def update_task(self, task_id: int, changed_by_id: int | None, **fields: Any) -> Task | None:
+        """Change the given fields; only they are sent, by name."""
         body = {key: _api_value(value) for key, value in fields.items()}
         if "tag_ids" in body:
             body["tag_ids"] = list(body["tag_ids"])
@@ -232,12 +243,14 @@ class RemoteTaskService:
         self, task_id: int, new_parent_id: int | None, new_order: int | None,
         changed_by_id: int | None,
     ) -> Task | None:
+        """Give a task another parent and/or place among its siblings."""
         self._api.request(
             "POST", f"/tasks/{task_id}/move", {"parent_id": new_parent_id, "order": new_order}
         )
         return self._after_change(task_id)
 
     def delete_task(self, task_id: int, changed_by_id: int | None) -> None:
+        """Delete a task on the server."""
         self._api.request("DELETE", f"/tasks/{task_id}")
         self._after_change(None)
 
@@ -264,6 +277,7 @@ class RemoteTaskService:
 
     @staticmethod
     def _change(row: dict[str, Any]) -> TaskChange:
+        """A history entry from the server as an (unsaved) TaskChange."""
         return TaskChange(
             id=row["id"],
             task_id=row["task_id"],
@@ -301,17 +315,21 @@ class RemoteAccount:
 
     @property
     def is_admin(self) -> bool:
+        """Whether the logged-in user is an administrator."""
         return self.user["role"] == "Admin"
 
     # -- users (administrators only) -------------------------------------------
 
     def list_users(self) -> list[dict[str, Any]]:
+        """All accounts with their email and role."""
         return self.api.request("GET", "/admin/users")
 
     def create_user(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Add an account and return it."""
         return self.api.request("POST", "/admin/users", fields)
 
     def update_user(self, user_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        """Change the given fields of an account and return it."""
         return self.api.request("PATCH", f"/admin/users/{user_id}", fields)
 
     # -- server settings (administrators only) -----------------------------------
@@ -321,6 +339,7 @@ class RemoteAccount:
         return self.api.request("GET", "/admin/settings")
 
     def save_settings(self, values: dict[str, Any]) -> dict[str, Any]:
+        """Save the server's settings and return them."""
         return self.api.request("PUT", "/admin/settings", values)
 
     def logout(self) -> None:
@@ -343,9 +362,11 @@ class RemoteManagement:
 
     @property
     def session(self) -> Session:
+        """The current copy of the server's data (replaced at every sync)."""
         return self.account.mirror.session
 
     def _send(self, method: str, path: str, body: Any = None) -> Any:
+        """Make a change on the server and download the result."""
         try:
             data = self.account.api.request(method, path, body)
             self.account.mirror.sync()
@@ -356,59 +377,74 @@ class RemoteManagement:
     # -- workflows and stages -------------------------------------------------------
 
     def add_workflow(self, name: str) -> Workflow | None:
+        """A new workflow on the server."""
         data = self._send("POST", "/workflows", {"name": name})
         return self.session.get(Workflow, data["id"])
 
     def rename_workflow(self, workflow_id: int, name: str) -> Workflow | None:
+        """Rename a workflow on the server."""
         self._send("PATCH", f"/workflows/{workflow_id}", {"name": name})
         return self.session.get(Workflow, workflow_id)
 
     def check_delete_workflow(self, workflow_id: int) -> Workflow:
+        """The workflow, if the local copy shows it may be deleted."""
         return management.check_delete_workflow(self.session, workflow_id)
 
     def delete_workflow(self, workflow_id: int) -> None:
+        """Delete a workflow on the server, which checks again."""
         self._send("DELETE", f"/workflows/{workflow_id}")
 
     def add_stage(self, workflow_id: int, name: str) -> Stage | None:
+        """A new stage at the end of a workflow on the server."""
         data = self._send("POST", f"/workflows/{workflow_id}/stages", {"name": name})
         added = max(data["stages"], key=lambda stage: stage["order"])  # it goes at the end
         return self.session.get(Stage, added["id"])
 
     def rename_stage(self, stage_id: int, name: str) -> Stage | None:
+        """Rename a stage on the server."""
         self._send("PATCH", f"/stages/{stage_id}", {"name": name})
         return self.session.get(Stage, stage_id)
 
     def shift_stage(self, stage_id: int, delta: int) -> Stage | None:
+        """Move a stage up (-1) or down (+1) on the server."""
         self._send("POST", f"/stages/{stage_id}/move", {"delta": delta})
         return self.session.get(Stage, stage_id)
 
     def set_stage_final(self, stage_id: int, is_final: bool) -> Stage | None:
+        """Set on the server whether tasks in the stage count as done."""
         self._send("PATCH", f"/stages/{stage_id}", {"is_final": is_final})
         return self.session.get(Stage, stage_id)
 
     def check_delete_stage(self, stage_id: int) -> Stage:
+        """The stage, if the local copy shows it may be deleted."""
         return management.check_delete_stage(self.session, stage_id)
 
     def delete_stage(self, stage_id: int) -> None:
+        """Delete a stage on the server, which checks again."""
         self._send("DELETE", f"/stages/{stage_id}")
 
     # -- tags --------------------------------------------------------------------------
 
     def tag_usage(self) -> list[tuple[Tag, int]]:
+        """Every tag with its number of tasks, from the local copy."""
         return management.tag_usage(self.session)
 
     def add_tag(self, name: str) -> Tag | None:
+        """A new tag on the server."""
         data = self._send("POST", "/tags", {"name": name})
         return self.session.get(Tag, data["id"])
 
     def rename_tag(self, tag_id: int, name: str) -> Tag | None:
+        """Rename a tag on the server."""
         self._send("PATCH", f"/tags/{tag_id}", {"name": name})
         return self.session.get(Tag, tag_id)
 
     def check_delete_tag(self, tag_id: int) -> Tag:
+        """The tag, if the local copy shows it may be deleted."""
         return management.check_delete_tag(self.session, tag_id)
 
     def delete_tag(self, tag_id: int) -> None:
+        """Delete a tag on the server, which checks again."""
         self._send("DELETE", f"/tags/{tag_id}")
 
 
@@ -431,6 +467,7 @@ def load_login() -> tuple[str, str] | None:
 
 
 def forget_login() -> None:
+    """Delete the remembered login."""
     LOGIN_FILE.unlink(missing_ok=True)
 
 

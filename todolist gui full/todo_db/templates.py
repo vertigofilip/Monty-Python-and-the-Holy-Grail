@@ -19,6 +19,7 @@ from .models import Priority, SubtaskTemplate, Urgency
 
 
 def template_data(template: SubtaskTemplate) -> dict[str, Any]:
+    """A template as plain data, with the levels by name."""
     return {
         "id": template.id,
         "name": template.name,
@@ -52,6 +53,7 @@ def _apply(template: SubtaskTemplate, fields: dict[str, Any]) -> None:
 
 
 def add_template(session: Session, fields: dict[str, Any]) -> SubtaskTemplate:
+    """A new template, Normal and Medium unless given; the name must be free."""
     template = SubtaskTemplate(priority=Priority.Normal, urgency=Urgency.Medium)
     _apply(template, {"name": "", **fields})
     session.add(template)
@@ -62,6 +64,7 @@ def add_template(session: Session, fields: dict[str, Any]) -> SubtaskTemplate:
 def update_template(
     session: Session, template_id: int, fields: dict[str, Any]
 ) -> SubtaskTemplate:
+    """Change the given fields of a template; the name must stay free."""
     template: SubtaskTemplate = _get(session, SubtaskTemplate, template_id)  # type: ignore[assignment]
     _apply(template, fields)
     _commit(session, tr("A template with this name already exists."))

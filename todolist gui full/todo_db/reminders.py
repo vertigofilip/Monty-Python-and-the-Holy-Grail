@@ -1,4 +1,4 @@
-"""Reminders: system notifications about unfinished tasks due today or overdue.
+"""Reminders: about unfinished tasks due today or overdue, or important or urgent.
 
 While the desktop program is open, a background thread looks for such tasks
 every CHECK_MINUTES (in server mode, while the server cannot be reached, among
@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from . import reminder_core, settings
 from .reminder_core import (  # noqa: F401 - also this module's names, as before
     BACKGROUND, CHECK_MINUTES, ENABLED, FONT_SIZE, NOTIFICATION_SECONDS, ONLY_MINE,
-    REPEAT_MINUTES, SETTINGS, WINDOW, DueTask, due_tasks_in, is_due,
+    REPEAT_MINUTES, SETTINGS, WINDOW, DueTask, due_tasks_in, in_reminder_order, is_due,
 )
 from .i18n import tr
 from .models import Stage, Task
@@ -42,15 +42,14 @@ log = logging.getLogger("todo_db.reminders")
 
 
 def local_due_tasks(session_factory: Callable[[], Session], today: date) -> list[DueTask]:
-    """Due tasks in todo.db; uses its own session, so it is safe in another thread."""
+    """Tasks to remind of in todo.db; uses its own session, so it is safe in another thread."""
     with session_factory() as session:
-        query = (
-            select(Task)
-            .join(Task.stage)
-            .where(Task.due_date.is_not(None), Task.due_date <= today, Stage.is_final.is_(False))
-            .order_by(Task.due_date, Task.id)
-        )
-        return [DueTask(task.id, task.name, task.due_date) for task in session.scalars(query)]
+        query = select(Task).join(Task.stage).where(Stage.is_final.is_(False))
+        return in_reminder_order([
+            DueTask(task.id, task.name, task.due_date)
+            for task in session.scalars(query)
+            if is_due(task.due_date, False, today, task.priority.name, task.urgency.name)
+        ])
 
 
 def remote_due_tasks(

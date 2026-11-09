@@ -17,6 +17,7 @@ def _by_name(enum_class: type[enum.Enum]) -> BeforeValidator:
     """Accept an enum by name ("Important") as well as by value (2)."""
 
     def convert(value: Any) -> Any:
+        """A level's name becomes the level; anything else is left to the check."""
         if isinstance(value, str) and value in enum_class.__members__:
             return enum_class[value]
         return value
@@ -35,11 +36,13 @@ Location = Annotated[str, Field(max_length=200)]
 
 
 class LoginIn(BaseModel):
+    """What POST /auth/login receives."""
     email: str
     password: str
 
 
 class UserOut(BaseModel):
+    """An account, as administrators and its owner see it."""
     id: int
     name: str
     email: str | None
@@ -56,12 +59,14 @@ class PublicUserOut(BaseModel):
 
 
 class TokenOut(BaseModel):
+    """The answer to a login: the token and who it is for."""
     token: str
     expires_at: datetime
     user: UserOut
 
 
 class UserCreate(BaseModel):
+    """A new account."""
     name: Name
     email: str
     password: Password | None = None
@@ -69,6 +74,7 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
+    """Changes to an account; only the fields sent are changed."""
     name: Name | None = None
     email: str | None = None
     password: Password | None = None
@@ -80,6 +86,7 @@ class UserUpdate(BaseModel):
 
 
 class StageOut(BaseModel):
+    """One stage of a workflow."""
     id: int
     name: str
     order: int
@@ -87,17 +94,20 @@ class StageOut(BaseModel):
 
 
 class WorkflowOut(BaseModel):
+    """A workflow with its stages in order."""
     id: int
     name: str
     stages: list[StageOut]
 
 
 class TagOut(BaseModel):
+    """A tag."""
     id: int
     name: str
 
 
 class TagUsageOut(TagOut):
+    """A tag with its number of tasks."""
     tasks: int  # how many tasks have the tag
 
 
@@ -115,10 +125,12 @@ class StageUpdate(BaseModel):
 
 
 class StageMove(BaseModel):
+    """Which way to move a stage."""
     delta: Literal[-1, 1]  # up or down
 
 
 class RepeatRuleOut(BaseModel):
+    """A repeat rule."""
     id: int
     name: str
     interval: int
@@ -132,6 +144,7 @@ UrgencyName = Literal["Low", "Medium", "High"]
 
 
 class SubtaskTemplateIn(BaseModel):
+    """A new subtask template."""
     name: Name
     description: str | None = None
     priority: PriorityName = "Normal"
@@ -148,6 +161,7 @@ class SubtaskTemplateUpdate(BaseModel):
 
 
 class SubtaskTemplateOut(BaseModel):
+    """A subtask template."""
     id: int
     name: str
     description: str | None
@@ -159,6 +173,7 @@ class SubtaskTemplateOut(BaseModel):
 
 
 class TaskCreate(BaseModel):
+    """A new task."""
     name: Name
     stage_id: int
     description: str | None = None
@@ -192,11 +207,13 @@ class TaskUpdate(BaseModel):
 
 
 class TaskMove(BaseModel):
+    """A task's new parent and place among its siblings."""
     parent_id: int | None = None
     order: Annotated[int, Field(ge=1)] | None = None  # None = at the end
 
 
 class TaskOut(BaseModel):
+    """A task with everything the clients show."""
     id: int
     name: str
     description: str | None
@@ -223,10 +240,12 @@ class TaskOut(BaseModel):
 
 
 class HistoryQuery(BaseModel):
+    """Which tasks' history is wanted together."""
     task_ids: list[int]
 
 
 class ChangeOut(BaseModel):
+    """One history entry."""
     id: int
     task_id: int
     changed_at: datetime
@@ -243,18 +262,22 @@ class ChangeOut(BaseModel):
 
 
 class SettingsIO(BaseModel):
+    """The server's settings, read and written."""
     auto_compress_enabled: bool
     compress_after_days: Annotated[int, Field(ge=0, le=36500)]
 
 
 class CompressAllIn(BaseModel):
+    """How old history must be to compress it in all tasks."""
     older_than_days: Annotated[int, Field(ge=0)] | None = None  # None = the saved setting
 
 
 class CompressTaskIn(BaseModel):
+    """How old history must be to compress it in one task."""
     older_than_days: Annotated[int, Field(ge=0)] | None = None  # None = all of it
 
 
 class CompressionOut(BaseModel):
+    """What a compression did."""
     tasks: int
     rows_removed: int

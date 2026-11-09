@@ -143,6 +143,7 @@ class TreeTooltip:
             tree.bind(sequence, lambda _event: self.hide(), add="+")
 
     def _moved(self, event: tk.Event) -> None:
+        """The mouse moved: on a new row, hide the tip and start waiting again."""
         row = self._tree.identify_row(event.y)
         if row == self._row:
             return
@@ -152,6 +153,7 @@ class TreeTooltip:
             self._pending = self._tree.after(self.DELAY_MS, self._show)
 
     def _show(self) -> None:
+        """The mouse rested long enough: show the row's text next to the pointer."""
         self._pending = None
         if not self._tree.exists(self._row):
             return
@@ -480,6 +482,7 @@ class DatePicker(tk.Toplevel):
                 button.grid(row=row, column=column, padx=1, pady=1)
 
     def _pick(self, day: date | str) -> None:
+        """Close with this day as the result ("" = no date)."""
         self.result = day
         self.destroy()
 
@@ -952,15 +955,19 @@ class LocalTemplates:
         self.session = session
 
     def list(self) -> list[dict[str, Any]]:
+        """All templates, by name."""
         return [templates.template_data(t) for t in templates.list_templates(self.session)]
 
     def add(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Save a new template and return it."""
         return templates.template_data(templates.add_template(self.session, fields))
 
     def update(self, template_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        """Change the given fields of a template and return it."""
         return templates.template_data(templates.update_template(self.session, template_id, fields))
 
     def delete(self, template_id: int) -> None:
+        """Delete a template; subtasks made from it stay."""
         templates.delete_template(self.session, template_id)
 
 
@@ -971,15 +978,19 @@ class RemoteTemplates:
         self.api = api
 
     def list(self) -> list[dict[str, Any]]:
+        """All templates on the server, by name."""
         return self.api.request("GET", "/subtask-templates")
 
     def add(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Save a new template on the server and return it."""
         return self.api.request("POST", "/subtask-templates", fields)
 
     def update(self, template_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        """Change the given fields of a template on the server and return it."""
         return self.api.request("PATCH", f"/subtask-templates/{template_id}", fields)
 
     def delete(self, template_id: int) -> None:
+        """Delete a template on the server; subtasks made from it stay."""
         self.api.request("DELETE", f"/subtask-templates/{template_id}")
 
 
@@ -1094,6 +1105,7 @@ class SubtaskTemplatesDialog(tk.Toplevel):
         return items
 
     def _selected(self) -> list[dict[str, Any]]:
+        """The templates selected in the list."""
         return [self._items[iid] for iid in self.list.selection() if iid in self._items]
 
     def _show_selected(self) -> None:
@@ -1110,6 +1122,7 @@ class SubtaskTemplatesDialog(tk.Toplevel):
         self._urgency.set_options(self._urgency._choices, item["urgency"])
 
     def _form(self) -> dict[str, Any]:
+        """The template as typed into the form."""
         return {
             "name": self._name.get().strip(),
             "description": self._description.get("1.0", "end").strip() or None,
@@ -1293,7 +1306,7 @@ class ReminderWindow(tk.Toplevel):
         today = date.today()
         for task in tasks[: self.MAX_TASKS]:
             text = f"•  {task.name}"
-            if task.due_date < today:
+            if task.due_date and task.due_date < today:
                 text += "  " + tr("(overdue since {date})").format(date=task.due_date.isoformat())
             tk.Label(
                 self._list, text=text, font=self._font, anchor="w", justify="left",
@@ -1427,6 +1440,7 @@ class LoginWindow(tk.Tk):
                 widget.configure(state="normal" if on else "disabled")  # type: ignore[call-arg]
 
     def _browse(self) -> None:
+        """Let the user pick the database file, and put it in the box."""
         chosen = choose_database_file(self, Path(self._database.get().strip() or DB_FILE))
         if chosen is not None:
             self._database.delete(0, "end")
@@ -1734,10 +1748,16 @@ class MultiChoice(ttk.Combobox):
         return lambda task: any(test(task) for test in tests)
 
     def _show(self) -> None:
+        """Show the ticked choices in the box, or "All"."""
         labels = [label for label, value in self._filters if value.key in self._chosen]
         self.set(", ".join(labels) if labels else tr("All"))
 
     def _open(self, _event: tk.Event | None = None) -> str:
+        """Open the list under the box (or close it if open).
+
+        It is a borderless window that grabs all clicks, so that a click anywhere
+        else closes it. Above the box when there is no room below.
+        """
         if self._popup is not None:
             self._close()
             return "break"
@@ -1782,6 +1802,7 @@ class MultiChoice(ttk.Combobox):
         return "break"
 
     def _clicked(self, event: tk.Event) -> None:
+        """A click outside the open list closes it."""
         popup = self._popup
         if popup is None:
             return
@@ -1792,20 +1813,24 @@ class MultiChoice(ttk.Combobox):
             self._close()
 
     def _ticked(self) -> None:
+        """Take over the ticks from the list after a click in it."""
         self._chosen = [self._filters[index][1].key for index in self._listbox.curselection()]
         self._changed()
 
     def _clear(self) -> None:
+        """The "All" button: untick everything."""
         self._listbox.selection_clear(0, "end")
         self._chosen = []
         self._changed()
 
     def _changed(self) -> None:
+        """Show the new choice and tell the owner."""
         self._show()
         if self._on_change is not None:
             self._on_change()
 
     def _close(self) -> None:
+        """Close the open list, giving the clicks back to the window."""
         if self._popup is not None:
             self._popup.grab_release()
             self._popup.destroy()
@@ -1858,6 +1883,7 @@ class PresetForm(tk.Toplevel):
         self.grab_set()
 
     def _ok(self) -> None:
+        """Close with the preset, if its name is filled in and not taken."""
         name = self._name.get().strip()
         if not name:
             messagebox.showwarning(self.title(), tr("The preset needs a name."), parent=self)
@@ -1932,6 +1958,7 @@ class PresetsDialog(tk.Toplevel):
         self.grab_set()
 
     def reload(self, select: int | None = None) -> None:
+        """List the presets, selecting the one at this position."""
         self._list.delete(0, "end")
         for preset in self.presets:
             self._list.insert("end", preset.name)
@@ -1941,6 +1968,7 @@ class PresetsDialog(tk.Toplevel):
             self._list.see(select)
 
     def _selected(self) -> int | None:
+        """Position of the selected preset, or None (telling the user)."""
         picked = self._list.curselection()
         if not picked:
             messagebox.showinfo(self.title(), tr("Select a preset first."), parent=self)
@@ -1948,6 +1976,7 @@ class PresetsDialog(tk.Toplevel):
         return int(picked[0])
 
     def apply(self) -> None:
+        """Use the selected preset now."""
         index = self._selected()
         if index is not None:
             self._apply(index)
@@ -1959,6 +1988,7 @@ class PresetsDialog(tk.Toplevel):
         self.grab_set()  # the form took the grab; this window is modal again
 
     def edit(self) -> None:
+        """Edit the selected preset in its form."""
         index = self._selected()
         if index is None:
             return
@@ -1967,6 +1997,7 @@ class PresetsDialog(tk.Toplevel):
         self.grab_set()
 
     def delete(self) -> None:
+        """Delete the selected preset, after asking."""
         index = self._selected()
         if index is None:
             return
@@ -1979,6 +2010,7 @@ class PresetsDialog(tk.Toplevel):
             self.reload(index)
 
     def shift(self, delta: int) -> None:
+        """Move the selected preset up (-1) or down (+1) in the list."""
         index = self._selected()
         if index is None or not 0 <= index + delta < len(self.presets):
             return
@@ -2401,11 +2433,13 @@ class TodoApp(tk.Tk):
         horizontal = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
 
         def xscroll(first: str, last: str) -> None:
+            """Keep the bottom scrollbar in step, and tell the owner."""
             horizontal.set(first, last)
             if on_scroll is not None:
                 on_scroll()
 
         def yscroll(first: str, last: str) -> None:
+            """Keep the side scrollbar in step, and tell the owner."""
             vertical.set(first, last)
             if on_scroll is not None:
                 on_scroll()
@@ -2494,6 +2528,7 @@ class TodoApp(tk.Tk):
         return LocalManagement(self.session)
 
     def _templates(self) -> LocalTemplates | RemoteTemplates:
+        """The subtask templates: on the server when logged in to one."""
         if self._account:
             return RemoteTemplates(self._account.api)
         return LocalTemplates(self.session)
@@ -2549,6 +2584,7 @@ class TodoApp(tk.Tk):
         options: list[tuple[str, Filter | None]] = [(tr("All"), None)]
 
         def add(label: str, key: str, test: Predicate) -> None:
+            """Add one choice to the column's filter."""
             options.append((label, Filter(key, test)))
 
         if column == "Stage":
@@ -2664,6 +2700,7 @@ class TodoApp(tk.Tk):
         return True
 
     def edit_preset(self, index: int, parent: tk.Misc) -> bool:
+        """Edit a filter preset in its form; True if it was changed."""
         others = {p.name for i, p in enumerate(self.presets) if i != index}
         form = PresetForm(self, self.presets[index], others, tr("Edit preset"))
         parent.wait_window(form)
@@ -2674,6 +2711,7 @@ class TodoApp(tk.Tk):
         return True
 
     def manage_presets(self) -> None:
+        """Open the window that lists, edits and orders the filter presets."""
         self.wait_window(PresetsDialog(
             self, tr("Filter presets"), self.presets,
             apply=lambda index: self.apply_preset(self.presets[index]),
@@ -2699,6 +2737,7 @@ class TodoApp(tk.Tk):
         menu.add_command(label=tr("Clear sort"), command=lambda: self.apply_sort(()))
 
     def sort_presets_changed(self) -> None:
+        """Save the sort presets and rebuild the Sort menu."""
         save_sort_presets(self.sort_presets)
         self._fill_sort_menu()
 
@@ -2711,6 +2750,7 @@ class TodoApp(tk.Tk):
     def _sort_form(
         self, sort: Any, name: str, taken: set[str], title: str, parent: tk.Misc
     ) -> SortPreset | None:
+        """Ask for a sort preset (Sort window with a name); None if cancelled."""
         form = SortDialog(self, list(sort), preset_name=name, taken=taken, title=title)
         parent.wait_window(form)
         if form.result is None:
@@ -2728,6 +2768,7 @@ class TodoApp(tk.Tk):
         return True
 
     def edit_sort_preset(self, index: int, parent: tk.Misc) -> bool:
+        """Edit a sort preset in its form; True if it was changed."""
         old = self.sort_presets[index]
         taken = {p.name for i, p in enumerate(self.sort_presets) if i != index}
         preset = self._sort_form(old.sort, old.name, taken, tr("Edit sort preset"), parent)
@@ -2738,6 +2779,7 @@ class TodoApp(tk.Tk):
         return True
 
     def manage_sort_presets(self) -> None:
+        """Open the window that lists, edits and orders the sort presets."""
         self.wait_window(PresetsDialog(
             self, tr("Sort presets"), self.sort_presets,
             apply=lambda index: self.apply_sort(self.sort_presets[index].sort),
@@ -2938,6 +2980,7 @@ class TodoApp(tk.Tk):
         cell.iid = ""  # type: ignore[attr-defined]
 
         def choose(_event: tk.Event) -> None:
+            """A click: select the cell's task, or unselect it if selected."""
             self._tooltip.hide()
             self.tree.focus_set()
             if cell.iid in self.tree.selection():  # type: ignore[attr-defined]
@@ -2947,10 +2990,12 @@ class TodoApp(tk.Tk):
             self.tree.selection_set(cell.iid)  # type: ignore[attr-defined]
 
         def scroll(units: int) -> None:
+            """The wheel over a cell scrolls the list under it."""
             self._tooltip.hide()
             self.tree.yview_scroll(units, "units")
 
         def hover(event: tk.Event) -> None:  # the tooltip of the row, as over the list
+            """Pass the mouse on to the list, for the row's tooltip."""
             self.tree.event_generate(
                 "<Motion>", x=cell.winfo_x() + event.x, y=cell.winfo_y() + event.y
             )
@@ -3100,9 +3145,11 @@ class TodoApp(tk.Tk):
         options: list[tuple[str, Filter | None]] = [(tr("All"), None)]
 
         def add(label: str, key: str, test: Callable[[TaskChange], bool]) -> None:
+            """Add one choice to the column's filter."""
             options.append((label, Filter(key, test)))
 
         def days_ago(change: TaskChange) -> int:
+            """How many days ago the change was made (0 = today)."""
             return (date.today() - change.changed_at.astimezone().date()).days
 
         if column == "When":
@@ -3332,6 +3379,7 @@ class TodoApp(tk.Tk):
         user_id = self._acting_user_id()
 
         def create() -> None:
+            """Add the task, show the list and select the new row."""
             task = self.service.create_task(
                 fields.pop("name"), fields.pop("stage_id"), user_id,
                 parent_id=parent_id, **fields,
@@ -3368,6 +3416,7 @@ class TodoApp(tk.Tk):
         chosen, parent_id, user_id = dialog.chosen, task.id, self._acting_user_id()
 
         def create() -> None:
+            """Add a subtask per chosen template; select the last one."""
             created = None
             for template in chosen:
                 fields = templates.subtask_fields(template, parent)
@@ -3577,6 +3626,7 @@ def run_remote(account: RemoteAccount) -> bool:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """The command line: --db chooses the database file for this run."""
     parser = argparse.ArgumentParser(prog="python -m todo_db.app",
                                      description="The to-do list's desktop program.")
     parser.add_argument(

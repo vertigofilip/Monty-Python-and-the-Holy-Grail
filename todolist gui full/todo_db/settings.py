@@ -34,6 +34,7 @@ def save_setting(key: str, value: Any) -> None:
 
 
 def _save_all(data: dict[str, Any]) -> None:
+    """Write all the settings to settings.json."""
     SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

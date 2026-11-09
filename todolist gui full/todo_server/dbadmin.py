@@ -56,6 +56,7 @@ def statistics(session: Session, db_path: Path) -> dict[str, Any]:
     """Size and contents of the database."""
 
     def count(*where: Any, model: Any = TaskChange) -> int:
+        """How many rows match."""
         return session.scalar(select(func.count()).select_from(model).where(*where)) or 0
 
     oldest = session.scalar(select(func.min(TaskChange.changed_at)))

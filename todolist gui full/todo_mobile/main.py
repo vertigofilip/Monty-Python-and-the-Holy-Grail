@@ -133,10 +133,12 @@ class TaskRow(ButtonBehavior, BoxLayout):
     task_id = NumericProperty(0)
 
     def on_release(self) -> None:
+        """A tap opens the task."""
         App.get_running_app().open_task(int(self.task_id))
 
 
 class TaskList(RecycleView):
+    """The scrolling task list (its look is in the KV text above)."""
     pass
 
 
@@ -152,6 +154,7 @@ def label(text: str, **kwargs: Any) -> Label:
 
 
 def button(text: str, action: Callable[[], Any], **kwargs: Any) -> Button:
+    """A button that runs action when tapped, one row high by default."""
     kwargs.setdefault("size_hint_y", None)
     kwargs.setdefault("height", ROW)
     widget = Button(text=text, **kwargs)
@@ -160,6 +163,7 @@ def button(text: str, action: Callable[[], Any], **kwargs: Any) -> Button:
 
 
 def text_input(text: str = "", **kwargs: Any) -> TextInput:
+    """A text box, single-line and one row high by default."""
     kwargs.setdefault("multiline", False)
     kwargs.setdefault("size_hint_y", None)
     kwargs.setdefault("height", ROW)
@@ -170,6 +174,7 @@ def text_input(text: str = "", **kwargs: Any) -> TextInput:
 
 
 def top_bar(title: str, *buttons: Button) -> BoxLayout:
+    """The bar at the top of a screen: the title and its buttons."""
     bar = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(4), padding=dp(4))
     bar.add_widget(Label(text=title, bold=True, font_size="18sp", shorten=True,
                          text_size=(None, None)))
@@ -191,16 +196,19 @@ class Choice(Spinner):
 
     @property
     def value(self) -> Any:
+        """The value behind the choice now shown."""
         return self._values[self.text]
 
 
 def form_row(caption: str, widget: Any) -> BoxLayout:
+    """A form's field: a small caption with the widget under it."""
     row = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2))
     caption_label = label(caption, font_size="13sp", color=(0.7, 0.75, 0.85, 1))
     row.add_widget(caption_label)
     row.add_widget(widget)
 
     def fit(*_args: Any) -> None:
+        """Keep the row as tall as its caption and widget."""
         row.height = caption_label.height + widget.height + dp(2)
 
     caption_label.bind(height=fit)
@@ -210,6 +218,7 @@ def form_row(caption: str, widget: Any) -> BoxLayout:
 
 
 def scrolling_column() -> tuple[ScrollView, GridLayout]:
+    """A vertically scrolling column; returns (the scroller, the column)."""
     scroll = ScrollView(do_scroll_x=False)
     column = GridLayout(cols=1, size_hint_y=None, spacing=dp(8), padding=dp(12))
     column.bind(minimum_height=column.setter("height"))
@@ -246,6 +255,7 @@ def system_bar_insets() -> tuple[int, int, int, int]:
 
 
 class LoginScreen(Screen):
+    """The first screen: log in to a server, or use the phone's own database."""
     def __init__(self, app: TodoMobileApp) -> None:
         super().__init__(name="login")
         self.app = app
@@ -279,6 +289,7 @@ class LoginScreen(Screen):
         self.add_widget(scroll)
 
     def log_in(self) -> None:
+        """Check the fields and log in, away from the screen's thread."""
         url, email, password = self.url.text.strip(), self.email.text.strip(), self.password.text
         if not (url and email and password):
             self.message.text = tr("Enter server address, email and password.")
@@ -287,6 +298,7 @@ class LoginScreen(Screen):
         api = remote.Api(url)
 
         def done(user: dict[str, Any]) -> None:
+            """Logged in: remember the choices and go on to the tasks."""
             settings.save_setting(MODE_SETTING, MODE_SERVER)
             settings.save_setting("server_url", api.base_url)
             settings.save_setting("email", email)
@@ -300,6 +312,7 @@ class LoginScreen(Screen):
 
 
 class ListScreen(Screen):
+    """The task list with its filters and the New task and Random task buttons."""
     def __init__(self, app: TodoMobileApp) -> None:
         super().__init__(name="list")
         self.app = app
@@ -487,6 +500,7 @@ class TaskScreen(Screen):
             self.repeat_count.text = "0"
 
     def _fields(self) -> dict[str, Any] | None:
+        """The form's values for the server; None (telling why) if invalid."""
         name = self.name_input.text.strip()
         if not name:
             self.app.message(tr("The task needs a name."))
@@ -512,6 +526,7 @@ class TaskScreen(Screen):
         }
 
     def save(self) -> None:
+        """Add the task, or send only the fields that changed."""
         fields = self._fields()
         if fields is None:
             return
@@ -528,11 +543,13 @@ class TaskScreen(Screen):
                 self.app.go_back()
 
     def _current(self, key: str) -> Any:
+        """A field's value now, to compare with the form."""
         if key == "tag_ids":
             return sorted(tag["id"] for tag in self.task["tags"])
         return self.task.get(key)
 
     def pick_due_date(self) -> None:
+        """Open the calendar on the date in the form."""
         try:
             current = parse_due(self.due_date.text)
         except ValueError:
@@ -540,9 +557,11 @@ class TaskScreen(Screen):
         self.app.open_popup(DatePopup(current, self._set_due_date))
 
     def _set_due_date(self, day: date | None) -> None:
+        """Put the date picked in the calendar into the form."""
         self.due_date.text = day.isoformat() if day else ""
 
     def next_stage(self) -> None:
+        """Move the task to the next stage of its workflow."""
         stage_id = next_stage_id(self.task, self.app.data["workflows"])
         if stage_id is None:
             self.app.message(tr("The task is already at the last stage."))
@@ -550,6 +569,7 @@ class TaskScreen(Screen):
             self.app.change("PATCH", f"/tasks/{self.task['id']}", {"stage_id": stage_id})
 
     def complete(self) -> None:
+        """Move the task to its workflow's final stage."""
         stage_id = final_stage_id(self.task, self.app.data["workflows"])
         if stage_id is None or stage_id == self.task["stage_id"]:
             self.app.message(tr("The task is already done."))
@@ -557,6 +577,7 @@ class TaskScreen(Screen):
             self.app.change("PATCH", f"/tasks/{self.task['id']}", {"stage_id": stage_id})
 
     def delete(self) -> None:
+        """Delete the task after asking; not one that has subtasks."""
         if any(t["parent_id"] == self.task["id"] for t in self.app.data["tasks"]):
             self.app.message(tr("This task has subtasks and cannot be deleted."))
             return
@@ -621,6 +642,7 @@ class DatePopup(Popup):
                 self.days.add_widget(widget)
 
     def pick(self, day: date | None) -> None:
+        """Close and hand over the day (None = no date)."""
         self.dismiss()
         self.on_pick(day)
 
@@ -664,6 +686,7 @@ class TemplatesScreen(Screen):
         self.add_widget(layout)
 
     def _chosen(self) -> set[int]:
+        """The ids of the templates ticked."""
         return {item_id for item_id, toggle in self.toggles.items() if toggle.state == "down"}
 
     def edit(self, item: dict[str, Any] | None) -> None:
@@ -675,6 +698,7 @@ class TemplatesScreen(Screen):
         urgency = Choice([(tr(u), u) for u in URGENCIES], item["urgency"] if item else "Medium")
 
         def save() -> None:
+            """Send the form: a new template, or the changes to this one."""
             fields = {"name": name.text.strip(), "description": description.text.strip() or None,
                       "priority": priority.value, "urgency": urgency.value}
             if not fields["name"]:
@@ -687,6 +711,7 @@ class TemplatesScreen(Screen):
                 self._send("POST", "/subtask-templates", fields)
 
         def delete() -> None:
+            """Delete this template, after asking."""
             popup.dismiss()
             self.app.confirm(
                 tr("Delete template(s) {names}?").format(names=f'"{item["name"]}"'),
@@ -709,12 +734,14 @@ class TemplatesScreen(Screen):
         api, chosen = self.app.api, self._chosen()
 
         def job() -> list[dict[str, Any]]:
+            """Make the change, then get the new list."""
             api.request(method, path, body)
             return api.request("GET", "/subtask-templates")
 
         self.app.work(job, lambda items: self.app.show_templates(items, self.parent_task, chosen))
 
     def add_subtasks(self) -> None:
+        """Add a subtask for each ticked template, then show the list."""
         chosen = [item for item in self.items if item["id"] in self._chosen()]
         if not chosen:
             self.app.message(tr("Select a template first."))
@@ -727,11 +754,13 @@ class TemplatesScreen(Screen):
         api = self.app.api
 
         def job() -> dict[str, Any]:
+            """Add the subtasks, then load everything again."""
             for item in chosen:
                 api.request("POST", "/tasks", templates.subtask_fields(item, parent))
             return api.load_all()
 
         def done(data: dict[str, Any]) -> None:
+            """Show the list with the new subtasks."""
             self.app.data = data
             self.app.show_list()
 
@@ -739,6 +768,7 @@ class TemplatesScreen(Screen):
 
 
 class HistoryScreen(Screen):
+    """The changes of one task."""
     def __init__(self, app: TodoMobileApp, task: dict[str, Any],
                  changes: list[dict[str, Any]]) -> None:
         super().__init__(name="history")
@@ -759,10 +789,12 @@ class HistoryScreen(Screen):
 
 
 class TodoMobileApp(App):
+    """The app: owns the screens, the connection and the loaded data."""
     title = "To-do"
     data = DictProperty()
 
     def build(self) -> BoxLayout:
+        """Set up storage and language, make the screen frame and start."""
         storage = Path(self.user_data_dir)
         settings.SETTINGS_FILE = storage / "settings.json"
         self.login_file = storage / "login.json"
@@ -791,6 +823,7 @@ class TodoMobileApp(App):
         return self.frame
 
     def _fit_system_bars(self, *_args: Any) -> None:
+        """Keep the app clear of the status and navigation bars."""
         left, top, right, bottom = system_bar_insets()
         # A gap so the top buttons do not touch the status bar or the screen's edge.
         gap = dp(12) if platform == "android" else 0
@@ -808,14 +841,17 @@ class TodoMobileApp(App):
         Clock.schedule_once(lambda _dt: self._drop_hidden(), 0.5)
 
     def _drop_hidden(self) -> None:
+        """Free the screens left behind; the list is kept for going back."""
         for screen in list(self.screens.screens):
             if screen is not self.screens.current_screen and screen is not self._list:
                 self.screens.remove_widget(screen)
 
     def _on(self, kind: type) -> bool:
+        """Whether the current screen is of this kind."""
         return isinstance(self.screens.current_screen, kind)
 
     def show_list(self, forward: bool = False) -> None:
+        """Show the task list, making it the first time."""
         if self._list is None:
             self._list = ListScreen(self)
             self.screens.add_widget(self._list)
@@ -825,6 +861,7 @@ class TodoMobileApp(App):
         Clock.schedule_once(lambda _dt: self._drop_hidden(), 0.5)
 
     def go_back(self) -> None:
+        """The Back button: one screen up, towards the list."""
         if self._on(TemplatesScreen) and self.screens.current_screen.parent_task:
             task = self._task(self.screens.current_screen.parent_task["id"])
             if task is not None:
@@ -850,12 +887,14 @@ class TodoMobileApp(App):
         return False
 
     def open_task(self, task_id: int | None, parent: dict[str, Any] | None = None) -> None:
+        """Open a task, or an empty form with task_id None (parent: a subtask)."""
         task = self._task(task_id) if task_id is not None else None
         if not self.data.get("workflows"):
             return
         self._show(TaskScreen(self, task, parent))
 
     def open_history(self, task: dict[str, Any]) -> None:
+        """Download a task's history and show it."""
         self._history_task_id = task["id"]
         self.work(lambda: self.api.request("GET", f"/tasks/{task['id']}/history"),
                   lambda changes: self._show(HistoryScreen(self, task, changes)))
@@ -868,14 +907,17 @@ class TodoMobileApp(App):
 
     def show_templates(self, items: list[dict[str, Any]], task: dict[str, Any] | None = None,
                        chosen: set[int] | None = None) -> None:
+        """Show the templates; with a task, to add them as its subtasks."""
         self._show(TemplatesScreen(self, items, task, chosen))
 
     def _task(self, task_id: int | None) -> dict[str, Any] | None:
+        """The loaded task with this id, or None."""
         return next((t for t in self.data.get("tasks", []) if t["id"] == task_id), None)
 
     # -- login ---------------------------------------------------------------------
 
     def _start(self) -> None:
+        """At start: the phone's database, the remembered login or the login."""
         if settings.load_setting(MODE_SETTING) == MODE_LOCAL:
             self.use_local()
             return
@@ -886,6 +928,7 @@ class TodoMobileApp(App):
         api = remote.Api(*remembered)
 
         def failed(error: Exception) -> None:
+            """The remembered login did not work: ask for a new one."""
             if isinstance(error, remote.NotLoggedIn):
                 remote.forget_login(self.login_file)
             self.show_login(str(error))
@@ -894,6 +937,7 @@ class TodoMobileApp(App):
                   lambda user: self.logged_in(api, user), on_error=failed)
 
     def show_login(self, message: str = "") -> None:
+        """Show the login screen, with a message if there is one."""
         screen = LoginScreen(self)
         screen.message.text = message
         self._list = None
@@ -929,6 +973,7 @@ class TodoMobileApp(App):
         ]
 
         def use() -> None:
+            """Use the place typed into the box."""
             popup.dismiss()
             self._use_database(storage.database_file(path_input.text, private))
 
@@ -960,6 +1005,7 @@ class TodoMobileApp(App):
             return
 
         def choose(copy: bool) -> None:
+            """Go on with the answer: copy the database there, or not."""
             popup.dismiss()
             self._switch_database(target, copy)
 
@@ -972,12 +1018,14 @@ class TodoMobileApp(App):
         )
 
     def _switch_database(self, target: Path, copy: bool) -> None:
+        """Open the database at target, copying the current one if asked."""
         from todo_mobile.local import LocalApi
 
         old = self.api if self.local else None
         current = self.local_database()
 
         def job() -> Any:
+            """Close the old file, copy it if asked and open the new one."""
             if old is not None:
                 old.close()  # the old file stays usable if the new one fails
             try:
@@ -989,6 +1037,7 @@ class TodoMobileApp(App):
             return LocalApi(target)
 
         def done(api: Any) -> None:
+            """Remember the new place and show its tasks."""
             default = Path(self.user_data_dir) / storage.DB_NAME
             settings.save_setting(storage.SETTING, None if target == default else str(target))
             settings.save_setting(MODE_SETTING, MODE_LOCAL)
@@ -997,6 +1046,7 @@ class TodoMobileApp(App):
         self.work(job, done)
 
     def logged_in(self, api: remote.Api, user: dict[str, Any]) -> None:
+        """Connected: load the tasks and start the reminders."""
         self.api, self.user = api, user
         self.work(api.load_all, self._loaded_first)
         self.start_reminders()
@@ -1005,6 +1055,7 @@ class TodoMobileApp(App):
 
     @staticmethod
     def reminders_on() -> bool:
+        """Whether reminders are switched on."""
         return settings.flag_setting("reminders_enabled", reminder_core.ENABLED)
 
     def set_reminders(self, on: bool) -> None:
@@ -1041,6 +1092,7 @@ class TodoMobileApp(App):
             self._reminders.start()
 
     def stop_reminders(self) -> None:
+        """Stop the background service, or the checks on a computer."""
         if platform == "android":
             try:
                 from jnius import autoclass
@@ -1096,6 +1148,7 @@ class TodoMobileApp(App):
         popup_window.height = content.height + dp(80)
 
         def closed(_popup: Popup) -> None:
+            """Forget the reminder window when it closes."""
             if self._reminder_popup is popup_window:
                 self._reminder_popup = None
 
@@ -1104,6 +1157,7 @@ class TodoMobileApp(App):
         popup_window.open()
 
     def _loaded_first(self, data: dict[str, Any]) -> None:
+        """The first data arrived: show the list."""
         self.data = data
         self.show_list(forward=True)
 
@@ -1129,6 +1183,7 @@ class TodoMobileApp(App):
         self._show_busy()
 
         def run() -> None:
+            """The background thread: run the job, hand the result back."""
             try:
                 result, error = job(), None
             except Exception as exc:  # noqa: BLE001 - shown to the user
@@ -1136,6 +1191,7 @@ class TodoMobileApp(App):
             Clock.schedule_once(lambda _dt: finish(result, error))
 
         def finish(result: Any, error: Exception | None) -> None:
+            """Back on the screen's thread: pass on the result or the error."""
             self._busy -= 1
             self._show_busy()
             if self._list is not None:
@@ -1154,6 +1210,7 @@ class TodoMobileApp(App):
         threading.Thread(target=run, daemon=True).start()
 
     def _show_busy(self) -> None:
+        """Show "…" in the title while something is being done."""
         self.title = "To-do…" if self._busy else "To-do"
         if self._list is not None:
             user = (self.user or {}).get("name", "")
@@ -1165,10 +1222,12 @@ class TodoMobileApp(App):
         api = self.api
 
         def job() -> dict[str, Any]:
+            """Send the change, then load everything again."""
             api.request(method, path, body)
             return api.load_all()
 
         def done(data: dict[str, Any]) -> None:
+            """Show the list with the change."""
             self.data = data
             self.show_list()
 
@@ -1181,6 +1240,7 @@ class TodoMobileApp(App):
             return
 
         def done(data: dict[str, Any]) -> None:
+            """Show the new data."""
             if self.api is api:  # not logged out in the meantime
                 self.data = data
                 if self._list is not None:
@@ -1233,10 +1293,12 @@ class TodoMobileApp(App):
             parent = by_id.get(parent["parent_id"])
 
         def again() -> None:
+            """Draw another task."""
             popup.dismiss()
             self.random_task(task["id"])
 
         def open_it() -> None:
+            """Open the drawn task."""
             popup.dismiss()
             self.open_task(task["id"])
 
@@ -1254,11 +1316,14 @@ class TodoMobileApp(App):
         popup = self._popup(tr("Random task"), *widgets, buttons)
 
     def message(self, text: str) -> None:
+        """Show a text with an OK button."""
         close = button(tr("OK"), lambda: popup.dismiss())
         popup = self._popup(tr("To-do list"), label(text), close)
 
     def confirm(self, question: str, action: Callable[[], Any]) -> None:
+        """Ask a question; run action only on the positive answer."""
         def yes() -> None:
+            """Close the question and do it."""
             popup.dismiss()
             action()
 
@@ -1268,16 +1333,20 @@ class TodoMobileApp(App):
         popup = self._popup(tr("To-do list"), label(question), buttons)
 
     def show_menu(self) -> None:
+        """The menu: user, language, reminders, templates, database, log out."""
         def log_out() -> None:
+            """Close the menu and log out."""
             popup.dismiss()
             self.log_out()
 
         user = self.user or {}
         def place() -> None:
+            """Close the menu and ask where the database is kept."""
             popup.dismiss()
             self.show_database_place()
 
         def manage_templates() -> None:
+            """Close the menu and open the templates."""
             popup.dismiss()
             self.open_templates()
 
@@ -1309,12 +1378,14 @@ class TodoMobileApp(App):
         )
 
     def language_choice(self) -> Choice:
+        """The drop-down that switches the language."""
         choice = Choice([(name, code) for code, name in i18n.LANGUAGES.items()],
                         i18n.get_language())
         choice.bind(text=lambda *_a: self._set_language(choice.value))
         return choice
 
     def _set_language(self, code: str) -> None:
+        """Switch the language and rebuild the screens in it."""
         if code == i18n.get_language():
             return
         i18n.set_language(code)
@@ -1331,6 +1402,7 @@ class TodoMobileApp(App):
 
 
 def main() -> None:
+    """Run the app."""
     TodoMobileApp().run()
 
 

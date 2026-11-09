@@ -50,10 +50,12 @@ def open_session(db_path: Path) -> Session:
 
 
 def by_email(session: Session, email: str) -> User | None:
+    """The user with this email, in any letter case."""
     return session.scalar(select(User).where(func.lower(User.email) == email.strip().lower()))
 
 
 def create_admin(db_path: Path, name: str, email: str) -> int:
+    """The create-admin command: a new administrator; 1 if the email exists."""
     with open_session(db_path) as session:
         if by_email(session, email) is not None:
             print(f"{email} already exists; use set-password, or change its role via the API.")
@@ -68,6 +70,7 @@ def create_admin(db_path: Path, name: str, email: str) -> int:
 
 
 def set_password(db_path: Path, email: str) -> int:
+    """The set-password command: a new password; 1 if there is no such user."""
     with open_session(db_path) as session:
         user = by_email(session, email)
         if user is None:
@@ -80,6 +83,7 @@ def set_password(db_path: Path, email: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Read the command line and run the server or one of the commands."""
     parser = argparse.ArgumentParser(
         # Installed (an executable, a Nix package) it is called by its own name.
         prog="python -m todo_server" if sys.argv[0].endswith("__main__.py") else Path(sys.argv[0]).stem,

@@ -71,6 +71,7 @@ def move_database(old: Path, new: Path, copy: bool) -> None:
 
 
 def _activity():  # type: ignore[no-untyped-def]
+    """The app's Android activity."""
     from jnius import autoclass
 
     return autoclass("org.kivy.android.PythonActivity").mActivity

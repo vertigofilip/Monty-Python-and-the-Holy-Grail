@@ -60,6 +60,7 @@ class FilterPreset:
     filters: dict[str, FilterValue] = field(default_factory=dict)  # column -> key(s)
 
     def as_json(self) -> dict[str, Any]:
+        """The preset as it is kept in settings.json."""
         return {"name": self.name, "text": self.text, "filters": self.filters}
 
 
@@ -83,6 +84,7 @@ def load_presets() -> list[FilterPreset]:
 
 
 def save_presets(presets: list[FilterPreset]) -> None:
+    """Keep the filter presets in settings.json."""
     settings.save_setting("filter_presets", [preset.as_json() for preset in presets])
 
 
@@ -94,6 +96,7 @@ class SortPreset:
     sort: tuple[tuple[str, bool], ...] = ()
 
     def as_json(self) -> dict[str, Any]:
+        """The preset as it is kept in settings.json."""
         return {"name": self.name, "sort": [[field, descending] for field, descending in self.sort]}
 
 
@@ -108,6 +111,7 @@ def load_sort_presets() -> list[SortPreset]:
 
 
 def save_sort_presets(presets: list[SortPreset]) -> None:
+    """Keep the sort presets in settings.json."""
     settings.save_setting("sort_presets", [preset.as_json() for preset in presets])
 
 
@@ -117,6 +121,7 @@ def load_sort() -> list[tuple[str, bool]]:
 
 
 def save_sort(sort: list[tuple[str, bool]] | tuple[tuple[str, bool], ...]) -> None:
+    """Keep the current sort order of the task list in settings.json."""
     settings.save_setting("sort", [[field, descending] for field, descending in sort])
 
 
@@ -149,6 +154,7 @@ def sorted_by(items: list[Any], sort: list[tuple[str, bool]] | tuple[tuple[str, 
     for field_name, descending in reversed(sort):
 
         def key(item: Any, field_name: str = field_name, descending: bool = descending) -> Any:
+            """What one item is compared by for this field."""
             found = value(field_name, item)
             missing = found is None
             # The first item puts entries without a value last in both directions.
